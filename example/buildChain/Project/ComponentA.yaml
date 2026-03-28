@@ -1,0 +1,39 @@
+component:
+  name: "::Project::ComponentA"
+  repository: "https://github.com/ComponentA.git"
+  submodule-strategy: none
+  build:
+    - type: ScriptRunner
+      configuration-name: "Deploy Project"
+      scripts:
+        - step-name: "Deploy"
+          file: deploy.sh
+      publish-artifacts:
+        - source: "deploy-details.txt"
+      parameters:
+        - name: DEPLOY_MACHINE
+          value: linux-amd64
+        - name: DEPLOY_ADDRESS
+          value: 192.168.1.100
+      dependencies:
+        - build-configuration-name: ::Project::SubProject::ComponentB::Composite
+          failure-action: ADD_PROBLEM
+          artifacts:
+            - source: "*%pipelineGetParam(DEPLOY_MACHINE)%.tar" # Get package only for configured system-architecture
+              destination: "ComponentB/"
+
+    - type: Composite
+      parameters:
+        # Override parameter from Deploy Project
+        - name: ::Project::ComponentA::Deploy Project::DEPLOY_ADDRESS
+          value: 192.168.1.90
+          type: text
+          display-type: PROMPT
+          label: "Deploy address"
+          description: "Address to deploy to"
+      dependencies:
+        - build-configuration-name: "Deploy Project"
+          failure-action: ADD_PROBLEM
+          artifacts:
+            - source: "*"
+              destination: "deploy/"

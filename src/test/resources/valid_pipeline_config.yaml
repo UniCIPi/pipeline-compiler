@@ -1,0 +1,11 @@
+component:
+  name: "::example-project"
+  repository: "https://github.com/example/repository.git"
+  default-branch: "main"
+  submodule-strategy: "recursive"
+  build:
+    - type: ScriptRunner
+      configuration-name: "Example script"
+      scripts:
+      - file: "example_script.sh"
+        step-name: "Example step"

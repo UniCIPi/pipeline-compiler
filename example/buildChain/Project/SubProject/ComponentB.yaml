@@ -1,0 +1,29 @@
+# ComponentA represent a theoretical Go Module
+component:
+  name: "::Project::SubProject::ComponentB"
+  repository: "https://github.com/ComponentB.git"
+  submodule-strategy: recursive # recursive, shallow, none
+  build:
+    - type: "GoTest"
+    - type: "GoPackage"
+      system-list:
+        - linux
+        - windows
+      arch-list:
+        - amd64
+        - arm64
+      dependencies:
+        - build-configuration-name: "Go Test"
+          failure-action: FAIL
+    - type: Composite
+      dependencies:
+        - build-configuration-name: "Go Package"
+          failure-action: ADD_PROBLEM
+          artifacts:
+            - source: "*"
+              destination: "package/"
+        - build-configuration-name: "Go Test"
+          failure-action: ADD_PROBLEM
+          artifacts:
+            - source: "test-results.xml"
+              destination: "test-results/"
