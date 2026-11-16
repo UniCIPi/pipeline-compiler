@@ -1,14 +1,26 @@
-package com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions
+package fanci.compiler.configurationModel.buildTypeDefinitions
 
 /**
  * Build and push Docker image.
- * @see com.bringauto.pipelinecompiler.pipeline.buildConfiguration.DockerBuildAndPush
+ * @see fanci.compiler.pipeline.buildConfiguration.DockerBuildAndPush
  */
 data class DockerBuildAndPush(
     /**
-     * Relative path to Dockerfile from the repository root.
+     * Relative path to Dockerfile from the dockerContextDir.
      */
     var dockerFilePath: String = "./Dockerfile",
+
+    /**
+     * Relative path to the directory containing the docker build context (PATH)
+     */
+    var dockerContextDir: String = ".",
+
+    /**
+     * If defined, the configuration will use a build script instead of `docker build ...` command.
+     * Defines the path to the script. The script is called with the argument %fanciGetParam(IMAGE_NAME)%:%fanciGetParam(IMAGE_TAG)%
+     */
+    var dockerBuildScript: String?,
+
     /**
      * Name of the Docker image to be built. Including a full repository path, excluding tag
      */

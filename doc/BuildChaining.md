@@ -2,7 +2,7 @@
 
 Build chaining enables one build configuration depend on others, either within the same component or across components. It serves for build-once/use-many, multi-step orchestration, composition of artifacts, and a single entry point for parameters that flow through the chain.
 
-> NOTE: All examples in the document are in context of [example/buildChain](../example/buildChain) configuration directory.
+> NOTE: All examples in the document are in context of [example-configurations/configurations/Project](../example-configurations/configurations/Project) configuration directory.
 
 ## Why chain builds?
 
@@ -120,7 +120,6 @@ For each dependency, set how the orchestrating build should react if it fails or
 - IGNORE: Continue as if no error happened.
 - ADD_PROBLEM: Mark a problem but continue (for warning-like scenarios).
 - FAIL: Fail current build.
-- CANCEL: Cancel current build.
 
 Pick the strictest policy that matches downstream criticality.
 
@@ -157,7 +156,7 @@ Supports using wildcards to specify source files, e.g., `*.zip`, `**/*.txt`.
 
 Supports using package paths: `package.zip!path/to/file-in-package.txt`
 * Package paths are defined by exclamation mark '!' character.
-* Supported packages are zip, 7zip, jar, tar, and tar.gz.
+* Supported packages are zip, jar, tar, and tar.gz.
 * This will extract defined files to the destination folder.
 
 ---
@@ -165,8 +164,8 @@ Supports using package paths: `package.zip!path/to/file-in-package.txt`
 ## Parameter flow
 
 - Get parameter from dependency using FQN:
-  - Use `%pipelineGetParam(<FQN>)%` clause
-  - Example: `%pipelineGetParam(::Project::ComponentA::Deploy Project::DEPLOY_ADDRESS)%`
+  - Use `%fanciGetParam(<FQN>)%` clause
+  - Example: `%fanciGetParam(::Project::ComponentA::Deploy Project::DEPLOY_ADDRESS)%`
 - Override dependency input parameter before triggering the chain (in parameters or trigger sections):
     - Define the parameter name with FQN to pre-set values downstream.
     - Example:

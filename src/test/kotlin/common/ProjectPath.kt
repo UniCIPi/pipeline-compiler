@@ -1,6 +1,6 @@
 package common
 
-import com.bringauto.pipelinecompiler.common.ProjectPath
+import fanci.compiler.common.ProjectPath
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows

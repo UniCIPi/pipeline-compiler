@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.pipeline
+package fanci.compiler.pipeline
 
 object Validator {
     /** Validations aligned with the formal model */
@@ -15,7 +15,7 @@ object Validator {
             require(pdup.isEmpty()) { "Duplicate parameter names in '${bc.name}': ${pdup.joinToString()}" }
 
             // Matrix validity: non-empty lists
-            bc.matrix.forEach { (k, v) ->
+            bc.buildMatrix.forEach { (k, v) ->
                 require(v.isNotEmpty()) { "Matrix dimension '$k' in '${bc.name}' must have a non-empty value list" }
             }
         }

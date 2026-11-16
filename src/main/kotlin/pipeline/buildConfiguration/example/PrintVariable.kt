@@ -1,18 +1,18 @@
-package com.bringauto.pipelinecompiler.pipeline.buildConfiguration.example
+package fanci.compiler.pipeline.buildConfiguration.example
 
-import com.bringauto.pipelinecompiler.pipeline.buildConfiguration.AbstractBuildConfiguration
-import com.bringauto.pipelinecompiler.pipeline.BuildStep
-import com.bringauto.pipelinecompiler.pipeline.DisplayType
-import com.bringauto.pipelinecompiler.pipeline.Parameter
-import com.bringauto.pipelinecompiler.pipeline.SelectParameter
-import com.bringauto.pipelinecompiler.pipeline.TextParameter
-import com.bringauto.pipelinecompiler.configurationModel.BuildStepConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.PrintVariable
+import fanci.compiler.pipeline.buildConfiguration.AbstractBuildConfiguration
+import fanci.compiler.pipeline.BuildStep
+import fanci.compiler.pipeline.DisplayType
+import fanci.compiler.pipeline.Parameter
+import fanci.compiler.pipeline.SelectParameter
+import fanci.compiler.pipeline.TextParameter
+import fanci.compiler.configurationModel.BuildConfigurationDefinition
+import fanci.compiler.configurationModel.buildTypeDefinitions.PrintVariable
 
 class PrintVariable(
-    buildStepConfiguration: BuildStepConfiguration,
+    buildConfigurationDefinition: BuildConfigurationDefinition,
     override val buildTypeDefinition: PrintVariable
-) : AbstractBuildConfiguration(buildStepConfiguration) {
+) : AbstractBuildConfiguration(buildConfigurationDefinition) {
     override val name = "Print variable"
     override val parameters: List<Parameter> = listOf(
         TextParameter(
@@ -39,16 +39,16 @@ class PrintVariable(
         BuildStep(
             name = "Print variable",
             script = """
-                echo "Configuration variable: %pipelineGetParam(configurationVariable)%"
-                echo "Prompt variable: %pipelineGetParam(promptVariable)%"
-                %pipelineSetParam(changedVariable, "This variable has been changed in the build step")%
-                echo "Not yet changed ChangedVariable: %pipelineGetParam(changedVariable)%"
+                echo "Configuration variable: %fanciGetParam(configurationVariable)%"
+                echo "Prompt variable: %fanciGetParam(promptVariable)%"
+                %fanciSetParam(changedVariable, "This variable has been changed in the build step")%
+                echo "Not yet changed ChangedVariable: %fanciGetParam(changedVariable)%"
             """.trimIndent()
         ),
         BuildStep(
             name = "Print changed variable",
             script = """
-                echo "Changed variable: %pipelineGetParam(changedVariable)%"
+                echo "Changed variable: %fanciGetParam(changedVariable)%"
             """.trimIndent()
         )
     )

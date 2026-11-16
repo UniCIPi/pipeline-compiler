@@ -1,7 +1,7 @@
-package com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions
+package fanci.compiler.configurationModel.buildTypeDefinitions
 
 /**
- * @see com.bringauto.pipelinecompiler.pipeline.buildConfiguration.CMake
+ * @see fanci.compiler.pipeline.buildConfiguration.CMake
  */
 data class CMake(
     /**
@@ -32,7 +32,16 @@ data class CMake(
      * Relative to the working directory.
      */
     val cmakeListsDir: String = "../",
-) : IBuildTypeDefinition
+    /**
+     * Name of the build configuration. Other build configurations and the release
+     * configuration refer to the build by this name.
+     */
+    val name: String = "CMake",
+) : IBuildTypeDefinition {
+    init {
+        require(name.isNotBlank()) { "CMake build configuration name cannot be blank." }
+    }
+}
 
 enum class CmakeBuildType {
     Release,

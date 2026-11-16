@@ -1,0 +1,40 @@
+# Predefined build configurations: testing and publishing of a Python package
+# (Section "Predefined CI/CD Configurations" of the paper)
+#
+# Dependency tree:
+#
+#     PyPI Publish
+#          |
+#     Python Package
+#
+# Python Package - lints the sources (ruff), checks the types (mypy) and runs the tests (pytest)
+#                  in every image of the matrix; the test results are published as a JUnit report.
+# PyPI Publish   - builds the distributions with Poetry and uploads them to PyPI. Started for
+#                  version tags only.
+#
+# The image name and the token are placeholders.
+
+component:
+  name: "::Templates::Library"
+  repository: "https://github.com/org/library.git"
+  default-branch: main
+  build-configurations:
+  - type: PythonPackage
+    image-matrix:
+    - "registry.example.com/org/python-poetry:3.12"
+    - "registry.example.com/org/python-poetry:3.13"
+    enable-shiv-package: false
+    triggers:
+    - type: vcs
+      include-branches:
+      - "*"
+  - type: PyPiPublish
+    docker-image: "registry.example.com/org/python-poetry:3.13"
+    token-id: "pypi-token"
+    dependencies:
+    - build-configuration-name: "Python Package"
+      failure-action: FAIL
+    triggers:
+    - type: vcs
+      include-branches:
+      - "v*"

@@ -1,1 +1,0 @@
-echo "Joey Parameter" > artifact.txt

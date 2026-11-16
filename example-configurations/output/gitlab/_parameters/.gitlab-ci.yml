@@ -1,0 +1,67 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+Command:
+  stage: default
+  image: debian:12
+  tags:
+  - docker
+  variables:
+    __parameters__Command__TIME_CMD: date | tr a-z A-Z
+  before_script:
+  - "export TIME_CMD=\"${__parameters__Command__TIME_CMD}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== s1 =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    echo "$(eval "${TIME_CMD}")"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for Command'
+  - "echo \"__parameters__Command__TIME_CMD=${TIME_CMD}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env
+References:
+  stage: default
+  image: debian:12
+  tags:
+  - docker
+  variables:
+    __parameters__References__N: app
+    __parameters__References__BR: "${CI_COMMIT_REF_NAME}"
+    __parameters__References__PACKAGE: "${N}-${BR}"
+  before_script:
+  - "export N=\"${__parameters__References__N}\""
+  - "export BR=\"${__parameters__References__BR}\""
+  - "export PACKAGE=\"${__parameters__References__PACKAGE}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== s1 =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    echo "${PACKAGE}"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for References'
+  - "echo \"__parameters__References__N=${N}\" >> build.env"
+  - "echo \"__parameters__References__BR=${BR}\" >> build.env"
+  - "echo \"__parameters__References__PACKAGE=${PACKAGE}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env

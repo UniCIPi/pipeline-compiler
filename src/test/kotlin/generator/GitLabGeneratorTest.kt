@@ -1,7 +1,8 @@
-package com.bringauto.pipelinecompiler.generator
+package fanci.compiler.generator
 
-import com.bringauto.pipelinecompiler.InputParser
-import com.bringauto.pipelinecompiler.generator.platforms.gitlab.GitLab
+import fanci.compiler.InputParser
+import fanci.compiler.generator.platforms.gitlab.GitLab
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
@@ -31,6 +32,29 @@ class GitLabGeneratorTest {
             assertTrue(text.contains("script:"))
         } finally {
             tmp.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `artifact patterns match the same paths as in TeamCity`() {
+        val platform = GitLab(DependencyManager(allBuildConfigurations = emptyList(), isSingleConfiguration = true), null)
+        val paths = listOf("a.txt", ".h.txt", "b.log", "d/a.txt", "d/e/a.txt", ".dotdir/a.txt", "d/.h/a.txt", "nested/x")
+        val expected = mapOf(
+            "a.txt" to listOf("a.txt"),
+            "*.txt" to listOf("a.txt", ".h.txt"),
+            "?.txt" to listOf("a.txt"),
+            ".h.txt" to listOf(".h.txt"),
+            ".*" to listOf(".h.txt"),
+            "*" to listOf("a.txt", ".h.txt", "b.log"),
+            "**" to paths,
+            "**/a.txt" to listOf("a.txt", "d/a.txt", "d/e/a.txt", ".dotdir/a.txt", "d/.h/a.txt"),
+            "d/**/a.txt" to listOf("d/a.txt", "d/e/a.txt", "d/.h/a.txt"),
+            "*/a.txt" to listOf("d/a.txt", ".dotdir/a.txt"),
+            "nest*/x" to listOf("nested/x"),
+        )
+        expected.forEach { (pattern, matched) ->
+            val regex = Regex(platform.toArtifactRegex(pattern))
+            assertEquals(matched, paths.filter { regex.matches(it) }, "pattern $pattern")
         }
     }
 }

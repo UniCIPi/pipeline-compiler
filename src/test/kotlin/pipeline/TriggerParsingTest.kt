@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.pipeline
+package fanci.compiler.pipeline
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
@@ -8,6 +8,7 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertFails
 import kotlin.test.assertTrue
 
@@ -20,13 +21,13 @@ class TriggerParsingTest {
     fun `parse vcs trigger with full structure`() {
         val yaml = """
             type: vcs
-            trigger-rules:
-              - vcs-root-component: MainRepo
-                include-paths:
-                  - src/**
-                  - tests/**
-                exclude-paths:
-                  - src/generated/**
+            watched-component: ::Project::MainRepo
+            include-paths:
+              - src/**
+              - tests/**
+            exclude-paths:
+              - src/generated/**
+            commit-message-regex: \[skip ci\]
             include-branches:
               - main
               - develop
@@ -40,21 +41,17 @@ class TriggerParsingTest {
         val trigger: Trigger = mapper.readValue(yaml)
         assertIs<VcsTrigger>(trigger)
         val vcs = trigger as VcsTrigger
-        
-        // Verify trigger rules
-        assertEquals(1, vcs.triggerRules.size)
-        val rule = vcs.triggerRules.first()
-        assertEquals("MainRepo", rule.vcsRootComponent)
-        assertEquals(2, rule.includePaths.size)
-        assertEquals("src/**", rule.includePaths[0])
-        assertEquals("tests/**", rule.includePaths[1])
-        assertEquals(1, rule.excludePaths.size)
-        assertEquals("src/generated/**", rule.excludePaths[0])
-        
+
+        // Verify watched component and paths
+        assertEquals("::Project::MainRepo", vcs.watchedComponent)
+        assertEquals(listOf("src/**", "tests/**"), vcs.includePaths)
+        assertEquals(listOf("src/generated/**"), vcs.excludePaths)
+        assertEquals("\\[skip ci\\]", vcs.commitMessageRegex)
+
         // Verify branch filters via new schema
         assertEquals(listOf("main", "develop", "feature/*"), vcs.includeBranches)
         assertTrue(vcs.excludeBranches.isEmpty())
-        
+
         // Verify parameters
         assertEquals(1, vcs.parameters.size)
         val param = vcs.parameters.first()
@@ -64,98 +61,60 @@ class TriggerParsingTest {
     }
 
     @Test
-    fun `parse vcs trigger with multiple trigger rules`() {
+    fun `minimal vcs trigger watches all paths of the owning component`() {
         val yaml = """
             type: vcs
-            trigger-rules:
-              - vcs-root-component: Frontend
-                include-paths:
-                  - frontend/**
-              - vcs-root-component: Backend
-                include-paths:
-                  - backend/**
-              - vcs-root-component: Docs
-                exclude-paths:
-                  - docs/internal/**
         """.trimIndent()
 
         val trigger: Trigger = mapper.readValue(yaml)
         assertIs<VcsTrigger>(trigger)
         val vcs = trigger as VcsTrigger
-        
-        assertEquals(3, vcs.triggerRules.size)
-        assertEquals("Frontend", vcs.triggerRules[0].vcsRootComponent)
-        assertEquals(listOf("frontend/**"), vcs.triggerRules[0].includePaths)
-        assertEquals("Backend", vcs.triggerRules[1].vcsRootComponent)
-        assertEquals(listOf("backend/**"), vcs.triggerRules[1].includePaths)
-        assertEquals("Docs", vcs.triggerRules[2].vcsRootComponent)
-        assertEquals(listOf("docs/internal/**"), vcs.triggerRules[2].excludePaths)
+        assertNull(vcs.watchedComponent)
+        assertTrue(vcs.includePaths.isEmpty())
+        assertTrue(vcs.excludePaths.isEmpty())
+        assertNull(vcs.commitMessageRegex)
     }
 
     @Test
-    fun `vcs trigger rule with only include paths should succeed`() {
+    fun `vcs trigger watching another component without include paths should succeed`() {
+        val yaml = """
+            type: vcs
+            watched-component: ::Project::Docs
+            exclude-paths:
+              - "**/*.md"
+        """.trimIndent()
+
+        val trigger: Trigger = mapper.readValue(yaml)
+        assertIs<VcsTrigger>(trigger)
+        val vcs = trigger as VcsTrigger
+        assertEquals("::Project::Docs", vcs.watchedComponent)
+        assertTrue(vcs.includePaths.isEmpty())
+        assertEquals(listOf("**/*.md"), vcs.excludePaths)
+    }
+
+    @Test
+    fun `vcs trigger with blank watched component should fail`() {
+        val yaml = """
+            type: vcs
+            watched-component: " "
+        """.trimIndent()
+
+        val exception = assertFails {
+            mapper.readValue<Trigger>(yaml)
+        }
+        assertTrue(exception.message?.contains("Watched component cannot be blank") ?: false)
+    }
+
+    @Test
+    fun `vcs trigger with trigger rules should fail`() {
         val yaml = """
             type: vcs
             trigger-rules:
-              - vcs-root-component: Repo
-                include-paths:
+              - include-paths:
                   - src/**
         """.trimIndent()
 
-        val trigger: Trigger = mapper.readValue(yaml)
-        assertIs<VcsTrigger>(trigger)
-        val vcs = trigger as VcsTrigger
-        assertEquals(1, vcs.triggerRules.size)
-        assertEquals(1, vcs.triggerRules[0].includePaths.size)
-        assertTrue(vcs.triggerRules[0].excludePaths.isEmpty())
-    }
-
-    @Test
-    fun `vcs trigger rule with only exclude paths should succeed`() {
-        val yaml = """
-            type: vcs
-            trigger-rules:
-              - vcs-root-component: Repo
-                exclude-paths:
-                  - generated/**
-        """.trimIndent()
-
-        val trigger: Trigger = mapper.readValue(yaml)
-        assertIs<VcsTrigger>(trigger)
-        val vcs = trigger as VcsTrigger
-        assertEquals(1, vcs.triggerRules.size)
-        assertTrue(vcs.triggerRules[0].includePaths.isEmpty())
-        assertEquals(1, vcs.triggerRules[0].excludePaths.size)
-    }
-
-    @Test
-    fun `vcs trigger rule without paths should fail`() {
-        val yaml = """
-            type: vcs
-            trigger-rules:
-              - vcs-root-component: Repo
-        """.trimIndent()
-
-        val exception = assertFails { 
-            mapper.readValue<Trigger>(yaml) 
-        }
-        assertTrue(exception.message?.contains("TriggerRule must define at least one path") ?: false)
-    }
-
-    @Test
-    fun `vcs trigger rule with empty path lists should fail`() {
-        val yaml = """
-            type: vcs
-            trigger-rules:
-              - vcs-root-component: Repo
-                include-paths: []
-                exclude-paths: []
-        """.trimIndent()
-
-        val exception = assertFails { 
-            mapper.readValue<Trigger>(yaml) 
-        }
-        assertTrue(exception.message?.contains("TriggerRule must define at least one path") ?: false)
+        assertFails { mapper.readValue<Trigger>(yaml) }
     }
 
     @Test
@@ -168,6 +127,33 @@ class TriggerParsingTest {
         val trigger: Trigger = mapper.readValue(yaml)
         assertIs<ScheduleTrigger>(trigger)
         assertEquals("0 0 * * *", (trigger as ScheduleTrigger).cron)
+    }
+
+    @Test
+    fun `parse schedule trigger with name`() {
+        val yaml = """
+            type: schedule
+            name: nightly
+            cron: "0 0 * * *"
+        """.trimIndent()
+
+        val trigger: Trigger = mapper.readValue(yaml)
+        assertIs<ScheduleTrigger>(trigger)
+        assertEquals("nightly", (trigger as ScheduleTrigger).name)
+    }
+
+    @Test
+    fun `schedule trigger with blank name should fail`() {
+        val yaml = """
+            type: schedule
+            name: " "
+            cron: "0 0 * * *"
+        """.trimIndent()
+
+        val exception = assertFails {
+            mapper.readValue<Trigger>(yaml)
+        }
+        assertTrue(exception.message?.contains("Schedule trigger name cannot be blank") ?: false)
     }
 
     @Test

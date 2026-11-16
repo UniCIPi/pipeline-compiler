@@ -1,0 +1,20 @@
+@file:Suppress("RedundantVisibilityModifier")
+
+package ArtifactPaths_OutputArtifacts
+
+import ArtifactPaths_OutputArtifacts.buildTypes.ArtifactPaths_OutputArtifacts_Inspect
+import ArtifactPaths_OutputArtifacts.buildTypes.ArtifactPaths_OutputArtifacts_MissingArtifacts
+import ArtifactPaths_OutputArtifacts.buildTypes.ArtifactPaths_OutputArtifacts_Publish
+import ArtifactPaths_OutputArtifacts.vcsRoots.ArtifactPaths_OutputArtifacts_VCS
+import jetbrains.buildServer.configs.kotlin.Project
+
+public object Project : Project({
+	name = "Output Artifacts"
+	id("ArtifactPaths_OutputArtifacts")
+
+	vcsRoot(ArtifactPaths_OutputArtifacts_VCS)
+
+	buildType(ArtifactPaths_OutputArtifacts_Publish)
+	buildType(ArtifactPaths_OutputArtifacts_Inspect)
+	buildType(ArtifactPaths_OutputArtifacts_MissingArtifacts)
+})

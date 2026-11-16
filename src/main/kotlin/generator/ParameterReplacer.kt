@@ -1,9 +1,13 @@
-package com.bringauto.pipelinecompiler.generator
+package fanci.compiler.generator
 
-import com.bringauto.pipelinecompiler.common.ProjectPath
-import com.bringauto.pipelinecompiler.pipeline.Artifact
-import com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration
-import com.bringauto.pipelinecompiler.pipeline.PipelineSettings
+import fanci.compiler.common.ProjectPath
+import fanci.compiler.pipeline.Artifact
+import fanci.compiler.pipeline.IBuildConfiguration
+import fanci.compiler.pipeline.JUnitReport
+import fanci.compiler.pipeline.PipelineSettings
+import fanci.compiler.pipeline.RefreshableToken
+import fanci.compiler.pipeline.Token
+import fanci.compiler.pipeline.UploadedKey
 
 object ParameterReplacer {
 
@@ -38,8 +42,23 @@ object ParameterReplacer {
         replaceParametersInBuildConfigurations(
             pipelineSettings.buildConfigurations,
             mappedGetFunc,
-            mappedSetFunc
+            mappedSetFunc,
+            platformParameters
         )
+
+        pipelineSettings.vcsAuthMethod = when (val auth = pipelineSettings.vcsAuthMethod) {
+            is RefreshableToken -> auth.copy(tokenId = replaceGetParameter(auth.tokenId, mappedGetFunc))
+            is Token -> auth.copy(tokenId = replaceGetParameter(auth.tokenId, mappedGetFunc))
+            is UploadedKey -> auth.copy(passphrase = auth.passphrase?.let { replaceGetParameter(it, mappedGetFunc) })
+            else -> null
+        }
+
+        // The pull request token is only replaced when the component configures its own; otherwise the
+        // already replaced VCS root credentials are reused.
+        val pullRequestConfiguration = pipelineSettings.pullRequestConfiguration
+        pipelineSettings.pullRequestConfiguration = pullRequestConfiguration.tokenId?.let { tokenId ->
+            pullRequestConfiguration.copy(tokenId = replaceGetParameter(tokenId, mappedGetFunc))
+        } ?: pullRequestConfiguration
     }
 
     private fun resolveEffectiveName(name: String, platformParameters: Map<String, String>): String {
@@ -64,22 +83,28 @@ object ParameterReplacer {
      *   - build steps,
      *   - triggers,
      *   - publish artifacts,
+     *   - junit reports,
      *   - parameters,
      *   - dependencies artifacts.
      */
     private fun replaceParametersInBuildConfigurations(
         buildConfigurations: List<IBuildConfiguration>,
         getParameterFormatFunc: (String) -> String,
-        setParameterFormatFunc: (String, String) -> String
+        setParameterFormatFunc: (String, String) -> String,
+        platformParameters: Map<String, String>
     ) {
         buildConfigurations.forEach { buildConfig ->
+            buildConfig.dockerImage = replaceGetParameter(buildConfig.dockerImage, getParameterFormatFunc)
+
             buildConfig.buildSteps.forEach { step ->
-                step.dockerImage = replaceGetParameter(step.dockerImage, getParameterFormatFunc)
                 step.dockerRunParameters = replaceGetParameter(step.dockerRunParameters, getParameterFormatFunc)
                 step.workDir = replaceGetParameter(step.workDir, getParameterFormatFunc)
                 step.script = replaceGetParameter(step.script, getParameterFormatFunc)
                 step.script = replaceSetParameter(step.script, setParameterFormatFunc)
-//                step.conditions.forEach { condition -> replaceGetParameter(condition.parameterName, getParameterFormatFunc) }
+                step.runConditions.forEach { condition ->
+                    condition.parameterName = resolveEffectiveName(condition.parameterName, platformParameters)
+                    condition.value = replaceGetParameter(condition.value, getParameterFormatFunc)
+                }
             }
 
             // Triggers are immutable data objects; parameter replacement is applied
@@ -87,6 +112,8 @@ object ParameterReplacer {
             // If needed, migrate to rebuilding the trigger list with replaced fields.
 
             buildConfig.publishArtifacts.replaceArtifactParameters(getParameterFormatFunc)
+
+            buildConfig.junitReports.replaceJUnitReportParameters(getParameterFormatFunc)
 
             buildConfig.parameters.forEach { parameter ->
                 parameter.value = replaceGetParameter(parameter.value, getParameterFormatFunc)
@@ -110,23 +137,23 @@ object ParameterReplacer {
     }
 
     /**
-     * Replaces all occurrences of %pipelineGetParam(parameterName)% with the value returned by getParameterFunc.
+     * Replaces all occurrences of %fanciGetParam(parameterName)% with the value returned by getParameterFunc.
      *
      * The parameter name must start with a letter and can contain letters, digits, underscores, and dots.
      * Dots are used by TeamCity and might not be allowed in other platforms.
      */
     private fun replaceGetParameter(input: String, getParameterFormatFunc: (String) -> String): String {
-        return input.replace(Regex("%pipelineGetParam\\(([a-zA-Z_:][a-zA-Z0-9._: ]+)\\)%")) { matchResult ->
+        return input.replace(Regex("%fanciGetParam\\(([a-zA-Z_:][a-zA-Z0-9._: ]*)\\)%")) { matchResult ->
             getParameterFormatFunc(matchResult.groupValues[1])
         }
 
     }
 
     /**
-     * Replaces all occurrences of %pipelineSetParam(parameter, value)% with the value returned by setParameterFunc.
+     * Replaces all occurrences of %fanciSetParam(parameter, value)% with the value returned by setParameterFunc.
      */
     private fun replaceSetParameter(input: String, setParameterFormatFunc: (String, String) -> String): String {
-        return input.replace(Regex("%pipelineSetParam\\(([a-zA-Z_][a-zA-Z0-9._]+), (.*)\\)%")) { matchResult ->
+        return input.replace(Regex("%fanciSetParam\\(([a-zA-Z_][a-zA-Z0-9._]*), (.*)\\)%")) { matchResult ->
             setParameterFormatFunc(
                 matchResult.groupValues[1],
                 matchResult.groupValues[2]
@@ -138,6 +165,12 @@ object ParameterReplacer {
         this.forEach { artifact ->
             artifact.source = replaceGetParameter(artifact.source, getParameterFormatFunc)
             artifact.destination = artifact.destination?.let { replaceGetParameter(it, getParameterFormatFunc) }
+        }
+    }
+
+    private fun List<JUnitReport>.replaceJUnitReportParameters(getParameterFormatFunc: (String) -> String) {
+        this.forEach { report ->
+            report.path = replaceGetParameter(report.path, getParameterFormatFunc)
         }
     }
 }

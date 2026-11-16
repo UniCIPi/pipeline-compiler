@@ -1,6 +1,7 @@
-package com.bringauto.pipelinecompiler.configurationModel
+package fanci.compiler.configurationModel
 
-import com.bringauto.pipelinecompiler.pipeline.VcsAuthMethod
+import fanci.compiler.pipeline.PullRequestConfiguration
+import fanci.compiler.pipeline.VcsAuthMethod
 
 /**
  * Git submodule checkout strategy.
@@ -25,38 +26,26 @@ enum class SubmoduleStrategy {
  * A component is a repository.
  * It can be a library, an application, or any other codebase that is part of the system.
  *
- * The entity contains build steps for the component.
+ * The entity contains build configurations for the component.
  */
 data class Component(
     val name: String,
     val repository: String,
     val defaultBranch: String = "main",
     val vcsAuthMethod: VcsAuthMethod? = null,
-    val submoduleStrategy: SubmoduleStrategy,
-    val build: List<BuildStepConfiguration>
-)
-
-// Not used
-data class SystemDefinition(
-    val enabled: Boolean,
-    val releaseVersionFormat: String,
-    val components: List<String>,
-    val automaticRelease: AutomaticRelease?
-) {
-    data class AutomaticRelease(
-        val enabled: Boolean,
-        val cron: String
-    )
-}
-
-// Not used
-data class ReleaseStep(
-    val script: String
+    val submoduleStrategy: SubmoduleStrategy = SubmoduleStrategy.none,
+    /**
+     * List of build configurations of the component.
+     */
+    val buildConfigurations: List<BuildConfigurationDefinition>,
+    /**
+     * Pull request (merge request) support of the component.
+     * Pull requests are supported by default; the section only narrows the defaults or disables the support.
+     */
+    val pullRequest: PullRequestConfiguration? = null
 )
 
 data class InputConfiguration(
     val variables: Map<String, String>?, // NOT USED
-    val component: Component,
-    val systemDefinition: SystemDefinition?, // NOT USED
-    val releaseSteps: Map<String, ReleaseStep>? // NOT USED
+    val component: Component
 )

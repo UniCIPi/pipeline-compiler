@@ -1,0 +1,65 @@
+# Build chain across components: deployment
+#
+# ComponentA deploys the packages built by ComponentB (SubProject/ComponentB.yaml). The dependency
+# crosses the border of the component, so it is written by the fully qualified name of the build
+# configuration. The script of the step is stored in scripts/deploy.sh.
+#
+# Dependency tree:
+#
+#     ::Project::ComponentA::Composite
+#                  |
+#     ::Project::ComponentA::Deploy Project
+#                  |
+#     ::Project::SubProject::ComponentB::Composite
+#                  |       \
+#             Go Package    |
+#                  |       /
+#               Go Test
+#
+# Deploy Project - downloads the package of the machine selected by DEPLOY_MACHINE from ComponentB
+#                  and deploys it to DEPLOY_ADDRESS. When the dependency fails, the deployment is
+#                  still executed, but its result is set to failed (ADD_PROBLEM).
+# Composite      - entry point of the chain: sets the parameter DEPLOY_ADDRESS of its dependency
+#                  and collects its artifacts.
+#
+# In GitLab CI/CD the generator adds a helper job, which starts the build jobs of ComponentB
+# in its repository and downloads their artifacts.
+
+component:
+  name: "::Project::ComponentA"
+  repository: "https://gitlab.example.com/project/component-a.git"
+  build-configurations:
+    - type: ScriptRunner
+      configuration-name: "Deploy Project"
+      steps:
+        - step-name: "Deploy"
+          file: deploy.sh
+      publish-artifacts:
+        - source: "deploy-details.txt"
+      parameters:
+        - name: DEPLOY_MACHINE
+          value: linux-amd64
+        - name: DEPLOY_ADDRESS
+          value: 192.168.1.100
+      dependencies:
+        - build-configuration-name: ::Project::SubProject::ComponentB::Composite
+          failure-action: ADD_PROBLEM
+          artifacts:
+            - source: "*%fanciGetParam(DEPLOY_MACHINE)%.tar" # Get package only for configured system-architecture
+              destination: "ComponentB/"
+
+    - type: Composite
+      parameters:
+        # Override parameter from Deploy Project
+        - name: ::Project::ComponentA::Deploy Project::DEPLOY_ADDRESS
+          value: 192.168.1.90
+          type: text
+          display-type: PROMPT
+          label: "Deploy address"
+          description: "Address to deploy to"
+      dependencies:
+        - build-configuration-name: "Deploy Project"
+          failure-action: ADD_PROBLEM
+          artifacts:
+            - source: "*"
+              destination: "deploy/"

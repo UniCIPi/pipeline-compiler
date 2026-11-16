@@ -1,6 +1,6 @@
-package com.bringauto.pipelinecompiler.generator.platforms.teamcity
+package fanci.compiler.generator.platforms.teamcity
 
-import com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration
+import fanci.compiler.pipeline.IBuildConfiguration
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -43,7 +43,7 @@ class TeamCityEnvironmentParser(envFile: File) {
     }
 
     fun getDockerRegistryNames(buildConfiguration: IBuildConfiguration): String {
-        if (buildConfiguration.buildSteps.all { it.dockerImage.isBlank() }) {
+        if (buildConfiguration.dockerImage.isBlank()) {
             return ""
         }
         /// docker image can be defined in variable, matrix, a script -> its not possible to filter by repositoryContains

@@ -1,17 +1,18 @@
-package com.bringauto.pipelinecompiler.generator.platforms.gitlab
+package fanci.compiler.generator.platforms.gitlab
 
-import com.bringauto.pipelinecompiler.common.ProjectPath
-import com.bringauto.pipelinecompiler.configurationModel.SubmoduleStrategy
-import com.bringauto.pipelinecompiler.generator.DependencyManager
-import com.bringauto.pipelinecompiler.generator.IPlatform
-import com.bringauto.pipelinecompiler.pipeline.Dependency
-import com.bringauto.pipelinecompiler.pipeline.FinishBuildTrigger
-import com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration
-import com.bringauto.pipelinecompiler.pipeline.Parameter
-import com.bringauto.pipelinecompiler.pipeline.PipelineSettings
-import com.bringauto.pipelinecompiler.pipeline.ScheduleTrigger
-import com.bringauto.pipelinecompiler.pipeline.Trigger
-import com.bringauto.pipelinecompiler.pipeline.VcsTrigger
+import fanci.compiler.common.ProjectPath
+import fanci.compiler.configurationModel.SubmoduleStrategy
+import fanci.compiler.generator.DependencyManager
+import fanci.compiler.generator.IPlatform
+import fanci.compiler.pipeline.Dependency
+import fanci.compiler.pipeline.FinishBuildTrigger
+import fanci.compiler.pipeline.IBuildConfiguration
+import fanci.compiler.pipeline.Parameter
+import fanci.compiler.pipeline.PipelineSettings
+import fanci.compiler.pipeline.PullRequestBranch
+import fanci.compiler.pipeline.ScheduleTrigger
+import fanci.compiler.pipeline.Trigger
+import fanci.compiler.pipeline.VcsTrigger
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator
@@ -20,17 +21,62 @@ import java.io.File
 import java.nio.file.Path
 import kotlin.collections.plusAssign
 
-private const val artifactDirectory = "_artifacts/"
+/**
+ * Staging directory of the published artifacts, inside the project directory as GitLab requires.
+ * The artifact functions skip it when searching for files, so the staged files are never matched again.
+ */
+internal const val artifactDirectory = ".artifacts/"
+
+/**
+ * Variable identifying the schedule trigger which started a scheduled pipeline, see [GitLab.createScheduleRule].
+ */
+internal const val scheduleVariable = "__PIPELINE_GENERATOR_SCHEDULE"
+
+/**
+ * Regular expression matching every relative path, the translation of the pattern `**`.
+ */
+private const val anyPathRegex = ".*"
+
+/**
+ * POSIX shell functions handling artifact files with the TeamCity artifact path semantics.
+ * Patterns are given as extended regular expressions created by [GitLab.toArtifactRegex],
+ * so the functions need only `sh`, `find`, `sed`, `grep` and `cp`, available in every common image.
+ * They succeed when nothing matches, also under `set -o pipefail` used by the GitLab runner.
+ *
+ * `artifact_list` prints the files under the base directory `$1` whose path relative to it matches `$2`,
+ * except the files in the staging directory [artifactDirectory].
+ *
+ * `copy_artifact` copies the files under the base directory `$1` matching `$2` to the absolute destination `$3`
+ * and prints the copied paths. The base is dropped from the copied paths, the matched paths are kept.
+ * When `$4`, the pattern without wildcards, denotes a directory, the content of the directory is copied.
+ */
+private val copyArtifactFunction = """
+    artifact_list() (
+      cd "${'$'}{1:-.}" 2>/dev/null || exit 0
+      find . -path ./${artifactDirectory.trimEnd('/')} -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^(${'$'}2)${'$'}" || [ ${'$'}? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "${'$'}f" ]; then printf '%s\n' "${'$'}f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${'$'}{1:-.}" 2>/dev/null || exit 0
+      if [ -n "${'$'}4" ] && [ -d "${'$'}4" ]; then cd "${'$'}4" && set -- . '$anyPathRegex' "${'$'}3"; fi
+      artifact_list . "${'$'}2" | while IFS= read -r f; do
+        mkdir -p "${'$'}3/${'$'}(dirname "${'$'}f")" && cp "${'$'}f" "${'$'}3/${'$'}f" && printf '%s\n' "${'$'}f"
+      done
+    )
+""".trimIndent()
 
 class GitLab(override val dependencyManager: DependencyManager, envFile: File?) : IPlatform {
     val environmentHelper: GitLabEnvironmentHelper = GitLabEnvironmentHelper(envFile)
 
     override val platformParameters: Map<String, String> = mapOf(
-        IPlatform.StandardParameter.PIPELINE_BUILD_BRANCH.name to "CI_COMMIT_REF_NAME",
-        IPlatform.StandardParameter.PIPELINE_BUILD_NUMBER.name to "CI_PIPELINE_ID",
-        IPlatform.StandardParameter.PIPELINE_BUILD_COUNTER.name to "CI_PIPELINE_ID", // Counter is not implemented in GitLab
-        IPlatform.StandardParameter.PIPELINE_DEFAULT_BRANCH.name to "CI_DEFAULT_BRANCH",
-        IPlatform.StandardParameter.PIPELINE_COMPONENT_URL.name to "CI_REPOSITORY_URL",
+        IPlatform.StandardParameter.FANCI_BUILD_BRANCH.name to "CI_COMMIT_REF_NAME",
+        IPlatform.StandardParameter.FANCI_BUILD_NUMBER.name to "CI_PIPELINE_ID",
+        IPlatform.StandardParameter.FANCI_BUILD_COUNTER.name to "CI_PIPELINE_ID", // Counter is not implemented in GitLab
+        IPlatform.StandardParameter.FANCI_DEFAULT_BRANCH.name to "CI_DEFAULT_BRANCH",
+        IPlatform.StandardParameter.FANCI_COMPONENT_URL.name to "CI_REPOSITORY_URL",
+        IPlatform.StandardParameter.FANCI_CHECKOUT_DIR.name to "CI_PROJECT_DIR",
     )
 
     override fun generatePipeline(pipelineSettings: PipelineSettings, targetDirectory: Path): String {
@@ -62,6 +108,8 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
 
         // Map build configuration name -> list of additional needs referencing aggregated trigger jobs
         externalNeedsForBuild = buildExternalNeedsForBuildMap(pipelineSettings, externalAgg)
+
+        validateParameterVariableNames(pipelineSettings)
 
         // Generate build configurations settings
         pipelineSettings.buildConfigurations.forEach { bc ->
@@ -100,17 +148,13 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
         val collectedRules = collectRulesRecursive(buildConfiguration, pipelineSettings, mutableSetOf())
         val rules = collectedRules.distinct().toMutableList()
 
-        if (rules.isEmpty()) {
-            // Default: run on success when no specific triggers are defined
-            rules += mapOf("when" to "on_success")
-        } else {
-            // Add a final catch-all manual fallback so users can run the job manually if no rule matched
-            // (Only add when there are conditional rules; first-match wins, so this must be last.)
-            rules += mapOf(
-                "when" to "manual",
-                "allow_failure" to true
-            )
-        }
+        // The job runs in pipelines started by hand (Run pipeline button or API) also when no trigger matches,
+        // and in no other pipeline. First match wins, so these rules must be last.
+        rules += mapOf(
+            "if" to "\$CI_PIPELINE_SOURCE == 'web' || \$CI_PIPELINE_SOURCE == 'api'",
+            "when" to "on_success"
+        )
+        rules += mapOf("when" to "never")
         return rules
     }
 
@@ -125,21 +169,32 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
 
         rules += createRulesFromExternalDependents(bc.name)
         rules += getRulesFromLocalDependents(settings, bc, visited)
-        rules += createRulesFromTriggers(bc)
+        rules += createRulesFromTriggers(bc, settings)
 
         return rules
     }
 
     // ... existing code ...
-    private fun createRulesFromTriggers(bc: IBuildConfiguration): MutableList<Map<String, Any>> {
+    private fun createRulesFromTriggers(bc: IBuildConfiguration, settings: PipelineSettings): MutableList<Map<String, Any>> {
         val rules = mutableListOf<Map<String, Any>>()
 
+        // Unnamed schedule triggers are numbered, so reordering the named ones does not change their identifiers
+        var unnamedScheduleIndex = 0
+        val scheduleIds = mutableSetOf<String>()
         bc.triggers.forEach { trigger ->
             if (trigger is VcsTrigger) {
-                rules.addAll(createVcsRules(trigger, bc.name))
+                if (watchesAnotherComponent(trigger, settings)) {
+                    reportOmittedVcsTrigger(trigger, bc.name, settings)
+                } else {
+                    rules.addAll(createVcsRules(trigger, bc.name, settings))
+                }
             } else if (trigger is ScheduleTrigger) {
-                // Schedules must be configured in UI
-                rules.add(createScheduleRule(trigger, bc.name))
+                val scheduleId = "${bc.name}-${trigger.name ?: ++unnamedScheduleIndex}"
+                require(scheduleIds.add(scheduleId)) {
+                    "[${bc.name}] Schedule triggers share the identifier '$scheduleId'. " +
+                            "Rename the schedule trigger named '${scheduleId.removePrefix("${bc.name}-")}'."
+                }
+                rules.add(createScheduleRule(trigger, bc.name, scheduleId))
             } else if (trigger is FinishBuildTrigger) {
                 println("WARNING: [${bc.name}] Finish build trigger is not supported by GitLab CI.")
             }
@@ -147,19 +202,66 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
         return rules
     }
 
-    fun createScheduleRule(trigger: ScheduleTrigger, bcName: String): Map<String, Any> {
-        println("INFO: [${bcName}] Manual action required: Create a schedule in GitLab -> Build -> Pipeline schedules.")
-        println("      Cron: '${trigger.cron}'")
+    /**
+     * A GitLab pipeline is created only by events in the repository holding its definition, so a VCS trigger
+     * can watch only the repository of the component owning the build configuration.
+     */
+    private fun watchesAnotherComponent(trigger: VcsTrigger, settings: PipelineSettings): Boolean =
+        trigger.watchedComponent != null &&
+                !ProjectPath.equalsCanonical(trigger.watchedComponent, settings.componentName)
 
-        return createRule("\$CI_PIPELINE_SOURCE == 'schedule'", "on_success", emptyList(), createVariablesForTrigger(bcName, trigger))
+    private fun reportOmittedVcsTrigger(trigger: VcsTrigger, bcName: String, settings: PipelineSettings) {
+        // Rules are collected again for every dependency of the build configuration, report the trigger once
+        if (reportedOmittedTriggers.add("${settings.componentName}::$bcName::${trigger.watchedComponent}")) {
+            println("WARNING: [${bcName}] VCS trigger watching the component '${trigger.watchedComponent}' is omitted. " +
+                    "GitLab CI can watch only the repository of the component owning the build configuration " +
+                    "('${settings.componentName}').")
+        }
     }
 
-    private fun createVcsRules(trigger: VcsTrigger, bcName: String): List<Map<String, Any>> {
+    /**
+     * Creates the rule of a schedule trigger.
+     *
+     * GitLab schedules are defined outside the pipeline definition, so the rule cannot tell which schedule
+     * started the pipeline. Every schedule trigger is therefore identified by the value [scheduleId]
+     * of the variable [scheduleVariable]: `<build configuration>-<name>` for a named trigger,
+     * `<build configuration>-<n>` for the n-th unnamed trigger of the build configuration.
+     * The schedule created in GitLab has to set this variable, otherwise it starts no job.
+     * The target branch is given by the schedule itself, so the branch filters of the trigger only tell
+     * which schedules to create and do not restrict the rule.
+     *
+     * TODO Create a script creating the schedules through the GitLab API instead of printing them.
+     * TODO Discuss matching the schedule description (`CI_PIPELINE_SCHEDULE_DESCRIPTION`, GitLab 17.8+) instead of
+     *  [scheduleVariable]. It saves the variable setup, but a retitled schedule gets disconnected. Matching the
+     *  identifier as a prefix of the description keeps it readable, the variable can stay as a fallback for older GitLab.
+     */
+    fun createScheduleRule(trigger: ScheduleTrigger, bcName: String, scheduleId: String): Map<String, Any> {
+        val condition = "\$CI_PIPELINE_SOURCE == 'schedule' && \$$scheduleVariable == '$scheduleId'"
+
+        // Rules are collected again for every dependency of the build configuration, report the schedule once
+        if (reportedSchedules.add("${dependencyManager.currentComponent}::$scheduleId")) {
+            val targetBranches = trigger.includeBranches.ifEmpty { listOf("<any branch>") }
+            println("INFO: [${bcName}] Manual action required: Create a schedule in GitLab -> Build -> Pipeline schedules.")
+            println("      Cron: '${trigger.cron}'")
+            println("      Target branch: ${targetBranches.joinToString(", ")}" +
+                    if (targetBranches.size > 1) " (one schedule per branch)" else "")
+            if (trigger.excludeBranches.isNotEmpty()) {
+                println("      Excluded branches: ${trigger.excludeBranches.joinToString(", ")}")
+            }
+            println("      Variable: $scheduleVariable = $scheduleId")
+        }
+
+        return createRule(condition, "on_success", emptyList(), createVariablesForTrigger(bcName, trigger))
+    }
+
+    private fun createVcsRules(trigger: VcsTrigger, bcName: String, settings: PipelineSettings): List<Map<String, Any>> {
         val rules = mutableListOf<Map<String, Any>>()
 
-        // Split patterns into Tags and Branches
-        val (tagIncludes, branchIncludes) = trigger.includeBranches.partition { it.startsWith("tags/") }
-        val (tagExcludes, branchExcludes) = trigger.excludeBranches.partition { it.startsWith("tags/") }
+        // Split patterns into Merge requests, Tags and Branches
+        val (mergeRequestIncludes, refIncludes) = trigger.includeBranches.partition { PullRequestBranch.isPullRequestPattern(it) }
+        val (mergeRequestExcludes, refExcludes) = trigger.excludeBranches.partition { PullRequestBranch.isPullRequestPattern(it) }
+        val (tagIncludes, branchIncludes) = refIncludes.partition { it.startsWith("tags/") }
+        val (tagExcludes, branchExcludes) = refExcludes.partition { it.startsWith("tags/") }
 
         val cleanedTagIncludes = tagIncludes.map { it.removePrefix("tags/") }
         val cleanedTagExcludes = tagExcludes.map { it.removePrefix("tags/") }
@@ -167,15 +269,21 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
         val changes = pathsFromRules(trigger)
 
         // 1. Check for "Run on Everything" wildcard cases
-        val isWildcardOnly = trigger.includeBranches.singleOrNull() == "*"
+        val isWildcardOnly = refIncludes.singleOrNull() == "*"
         val noFilters = trigger.includeBranches.isEmpty() && trigger.excludeBranches.isEmpty()
 
         if (noFilters || (isWildcardOnly && trigger.excludeBranches.isEmpty())) {
             rules.add(createRule("\$CI_PIPELINE_SOURCE == 'push'", "on_success", changes, createVariablesForTrigger(bcName, trigger)))
+            // A trigger that does not restrict branches covers merge requests as well
+            rules.addAll(
+                createMergeRequestRules(trigger, bcName, settings, listOf(PullRequestBranch.ALL), "on_success", true)
+            )
             return rules
         }
 
         // 2. Generate Exclusion Rules (when: never) - High Priority
+        rules.addAll(createMergeRequestRules(trigger, bcName, settings, mergeRequestExcludes, "never", false))
+
         if (branchExcludes.isNotEmpty()) {
             buildRefRegex(branchExcludes, emptyList())?.let { regex ->
                 rules.add(
@@ -222,7 +330,81 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
             rules.add(createRule("\$CI_PIPELINE_SOURCE == 'push' && $tagCondition", "on_success", changes, createVariablesForTrigger(bcName, trigger)))
         }
 
+        // 5. Generate Inclusion Rules (merge requests)
+        rules.addAll(createMergeRequestRules(trigger, bcName, settings, mergeRequestIncludes, "on_success", true))
+
         return rules
+    }
+
+    /**
+     * Creates rules for merge request pipelines from the `mr/` branch patterns of a trigger.
+     *
+     * GitLab needs no build feature for merge requests; a merge request pipeline is recognized by the
+     * `merge_request_event` pipeline source. The source and target branch filters of the component
+     * `pull-request` section are appended as additional conditions of the rule.
+     *
+     * @param patterns `mr/` patterns of the trigger. A wildcard selector covers all merge requests,
+     *                 `mr/<iid>` narrows the rule down to concrete merge requests.
+     * @param applyPullRequestFilters whether the component source/target branch filters restrict the rule.
+     *                 Exclusion rules must not be restricted by them, otherwise merge requests outside of
+     *                 the filtered scope would not be excluded.
+     */
+    private fun createMergeRequestRules(
+        trigger: VcsTrigger,
+        bcName: String,
+        settings: PipelineSettings,
+        patterns: List<String>,
+        whenClause: String,
+        applyPullRequestFilters: Boolean
+    ): List<Map<String, Any>> {
+        val configuration = settings.pullRequestConfiguration
+        if (patterns.isEmpty() || !configuration.enabled) {
+            return emptyList()
+        }
+
+        val conditions = mutableListOf("\$CI_PIPELINE_SOURCE == 'merge_request_event'")
+        conditions += refNameConditions(
+            "\$CI_MERGE_REQUEST_IID",
+            patterns.map { PullRequestBranch.selectorOf(it) },
+            emptyList()
+        )
+        if (applyPullRequestFilters) {
+            conditions += refNameConditions(
+                "\$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME",
+                configuration.includeSourceBranches,
+                configuration.excludeSourceBranches
+            )
+            conditions += refNameConditions(
+                "\$CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
+                configuration.includeTargetBranches,
+                configuration.excludeTargetBranches
+            )
+        }
+
+        return listOf(
+            createRule(
+                conditions.joinToString(" && "),
+                whenClause,
+                pathsFromRules(trigger),
+                createVariablesForTrigger(bcName, trigger)
+            )
+        )
+    }
+
+    /**
+     * Builds the conditions restricting a GitLab predefined variable to the given include/exclude patterns.
+     * Patterns that do not restrict anything (`*`) produce no condition.
+     */
+    private fun refNameConditions(variable: String, include: List<String>, exclude: List<String>): List<String> {
+        val conditions = mutableListOf<String>()
+        resolveIncludeCondition(include, variable, requireVariableExistence = false)
+            // A bare variable is only an existence check, which restricts nothing here
+            ?.takeIf { it != variable }
+            ?.let { conditions.add(it) }
+        if (exclude.isNotEmpty()) {
+            buildRefRegex(exclude, emptyList())?.let { conditions.add("$variable !~ /$it/") }
+        }
+        return conditions
     }
 
     /**
@@ -326,10 +508,13 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
         return rules
     }
 
-    fun generateArtifacts(buildStep: IBuildConfiguration): Map<String, Any> {
+    fun generateArtifacts(buildConfiguration: IBuildConfiguration): Map<String, Any> {
         val artifactsMap = mutableMapOf<String, Any>()
-        // Publish under namespaced directory _artifacts/<BC>/** so consumers can cleanly scope and clean
-        artifactsMap["paths"] = listOf("${getArtifactDirectoryOfBuild(buildStep.name)}**")
+        // Only jobs staging files get paths - GitLab fails the upload when no file matches
+        if (stagesFiles(buildConfiguration)) {
+            // Publish under namespaced directory .artifacts/<BC>/** so consumers can cleanly scope and clean
+            artifactsMap["paths"] = listOf("${getArtifactDirectoryOfBuild(buildConfiguration.name)}**")
+        }
         artifactsMap["when"] = "always"
         return artifactsMap
     }
@@ -352,6 +537,16 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
 
     // -------------- Helpers --------------
 
+    /**
+     * True if the job copies files into its staging directory: it publishes artifacts,
+     * or it is a composite consuming artifacts of its dependencies.
+     */
+    private fun stagesFiles(buildConfiguration: IBuildConfiguration): Boolean {
+        val isComposite = buildConfiguration.type == IBuildConfiguration.Type.COMPOSITE
+        return buildConfiguration.publishArtifacts.isNotEmpty() ||
+            (isComposite && buildConfiguration.dependencies.any { !it.artifacts.isNullOrEmpty() })
+    }
+
     private fun normalizeDirName(componentName: String): String =
         componentName.replace("::", "_").replace("/", "_")
 
@@ -361,6 +556,61 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
     private fun getArtifactDirectoryOfBuild(buildConfigurationName: String): String {
         return "$artifactDirectory${sanitizeFileName(buildConfigurationName)}/"
     }
+
+    /**
+     * Splits an artifact source path into the base directory and the pattern relative to it.
+     * The base consists of the whole segments before the first segment containing a wildcard,
+     * or of all segments except the last one when the path has no wildcard.
+     * Only the part of a path matched by the pattern is kept when copying, as in TeamCity.
+     */
+    private fun splitArtifactSource(source: String): Pair<String, String> {
+        val segments = source.trimEnd('/').split('/')
+        val firstWildcard = segments.indexOfFirst { it.contains('*') || it.contains('?') }
+        val baseSize = if (firstWildcard == -1) segments.size - 1 else firstWildcard
+        return segments.take(baseSize).joinToString("/") to segments.drop(baseSize).joinToString("/")
+    }
+
+    /**
+     * Creates the shell call of `copy_artifact` copying the files matching [source] under [sourceRoot] to [destination].
+     */
+    private fun copyArtifactCall(sourceRoot: String, source: String, destination: String): String {
+        val (base, pattern) = splitArtifactSource(source)
+        val literal = if (hasWildcard(pattern)) "" else pattern
+        return "copy_artifact \"$sourceRoot$base\" ${shellQuote(toArtifactRegex(pattern))} \"$destination\" ${shellQuote(literal)}"
+    }
+
+    private fun hasWildcard(pattern: String): Boolean = pattern.contains('*') || pattern.contains('?')
+
+    /**
+     * Translates an artifact path pattern to an extended regular expression matching the same relative paths.
+     * `*` matches any part of a name, `?` one character of a name and the segment `**` any number of names.
+     * As in TeamCity, the wildcards also match hidden names.
+     */
+    internal fun toArtifactRegex(pattern: String): String {
+        val segments = pattern.split('/')
+        return segments.withIndex().joinToString("") { (index, segment) ->
+            val isLast = index == segments.lastIndex
+            when {
+                segment == "**" && isLast -> anyPathRegex
+                segment == "**" -> "([^/]*/)*"
+                else -> segmentRegex(segment) + if (isLast) "" else "/"
+            }
+        }
+    }
+
+    /**
+     * Translates one segment of an artifact path pattern to an extended regular expression.
+     */
+    private fun segmentRegex(segment: String): String = segment.map { char ->
+        when (char) {
+            '*' -> "[^/]*"
+            '?' -> "[^/]"
+            in ".[]()+{}|^$\\" -> "\\$char"
+            else -> char.toString()
+        }
+    }.joinToString("")
+
+    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     /**
      * Convert any string to a safe environment token: only [A-Za-z0-9_], everything else becomes underscore.
@@ -422,12 +672,40 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
     }
 
     /**
-     * Collects path patterns for GitLab rules:changes from VCS trigger rules.
+     * Collects path patterns for GitLab rules:changes from the VCS trigger.
      * Excludes are not directly supported by GitLab's 'changes' list; we include only includePaths.
      */
     private fun pathsFromRules(trig: VcsTrigger): List<String> {
-        val includes = trig.triggerRules.flatMap { it.includePaths }
-        return includes.distinct()
+        return trig.includePaths.distinct()
+    }
+
+    /**
+     * Fails when two different parameters map to the same environment variable.
+     * The mapping replaces every character outside [A-Za-z0-9_] by an underscore, so e.g. "P-1" and "P_1"
+     * would silently share one variable.
+     * Full names are checked across the whole component, local names within each build configuration.
+     */
+    private fun validateParameterVariableNames(pipelineSettings: PipelineSettings) {
+        val currentComponent = dependencyManager.currentComponent
+        val fullNames = mutableMapOf<String, MutableSet<String>>()
+        pipelineSettings.buildConfigurations.forEach { bc ->
+            val localNames = mutableMapOf<String, MutableSet<String>>()
+            bc.parameters.forEach { p ->
+                val original = if (ProjectPath.isFullPath(p.name)) p.name else currentComponent.append(bc.name).append(p.name).toString()
+                fullNames.getOrPut(computeParamFullName(bc.name, p.name, currentComponent)) { mutableSetOf() } += original
+                localNames.getOrPut(computeLocalVarName(p.name)) { mutableSetOf() } += p.name
+            }
+            localNames.filterValues { it.size > 1 }.forEach { (variable, names) ->
+                throw IllegalArgumentException(
+                    "[${bc.name}] Parameters ${names.joinToString(", ") { "'$it'" }} map to the same GitLab variable '$variable'."
+                )
+            }
+        }
+        fullNames.filterValues { it.size > 1 }.forEach { (variable, names) ->
+            throw IllegalArgumentException(
+                "Parameters ${names.joinToString(", ") { "'$it'" }} map to the same GitLab variable '$variable'."
+            )
+        }
     }
 
     private fun aliasParametersShell(bc: IBuildConfiguration): List<String> {
@@ -436,7 +714,8 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
             val srcKey = computeParamFullName(bc.name, p.name, dependencyManager.currentComponent)
             val src = "${'$'}{${srcKey}}"
             val dst = computeLocalVarName(p.name)
-            lines += "export ${dst}=${src}"
+            // Quoted, some sh implementations split the value of an export argument into words
+            lines += "export ${dst}=\"${src}\""
         }
         return lines
     }
@@ -447,7 +726,7 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
     )
 
     private fun generateJobs(bc: IBuildConfiguration, pipelineSettings: PipelineSettings): Map<String, GitLabJob> {
-        val isMatrix = bc.matrix.isNotEmpty()
+        val isMatrix = bc.buildMatrix.isNotEmpty()
         val isComposite = bc.type == IBuildConfiguration.Type.COMPOSITE
         // If matrix, the worker is named ":run", otherwise it keeps the original name
         val runJobName = if (isMatrix) "${bc.name}:run" else bc.name
@@ -480,7 +759,7 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
 
         // --- 2. Matrix Configuration ---
         if (isMatrix) {
-            runJob.parallel = mapOf("matrix" to listOf(bc.matrix))
+            runJob.parallel = mapOf("matrix" to listOf(bc.buildMatrix))
         }
 
         // --- 3. Variables & Scripts ---
@@ -525,34 +804,14 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
         )
 
         // A. Stage Artifacts
-        val artifactPath = getArtifactDirectoryOfBuild(bc.name)
-        if (isComposite) {
-            // For Composite builds, publish ALL artifacts that were consumed from dependencies
-            // We copy consumed artifacts (based on dependency artifact mappings) into our namespaced artifacts dir.
-            after += "echo '# Staging consumed dependency artifacts (Composite)'"
-//            after += "mkdir -p \"${artifactPath}\""
-            bc.dependencies.forEach { dep ->
-                dep.artifacts?.forEach { a ->
-                    // If a destination was specified in the dependency mapping, publish from that destination directory
-                    // otherwise publish files by their original source patterns copied into the working directory.
-                    val targetPath = if (a.destination != null) "${artifactPath}${a.destination}" else artifactPath
-                    val stageSrc = if (a.destination != null) "${a.destination}**" else a.source
-                    after += """
-                        mkdir -p "$targetPath"
-                        for f in ${stageSrc}; do cp -r "${'$'}f" "$targetPath" || true; done
-                    """.trimIndent()
-                }
-            }
-        } else if (bc.publishArtifacts.isNotEmpty()) {
+        // Composite builds stage the consumed artifacts already when copying them from dependencies.
+        if (bc.publishArtifacts.isNotEmpty()) {
             // Regular/Deployment: stage artifacts explicitly published by this build configuration
+            val artifactPath = getArtifactDirectoryOfBuild(bc.name)
             after += "echo '# Staging published artifacts'"
+            after += copyArtifactFunction
             bc.publishArtifacts.forEach { a ->
-                val dst = a.destination?.let { a.destination } ?: ""
-                // Use explicit quoting for bash variables to ensure safe handling
-                after += "mkdir -p \"${artifactPath}/${dst}\""
-                after += """
-                        for f in ${a.source}; do cp -r "${'$'}f" "${artifactPath}" || true; done
-                    """.trimIndent()
+                after += copyArtifactCall("", a.source, "\$CI_PROJECT_DIR/$artifactPath${a.destination ?: ""}")
             }
         }
 
@@ -563,7 +822,7 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
                 val full = computeParamFullName(bc.name, p.name, dependencyManager.currentComponent)
                 val local = computeLocalVarName(p.name)
                 after += """
-                    echo "$full=$local" >> build.env
+                    echo "$full=${'$'}{$local}" >> build.env
                 """.trimIndent()
             }
         }
@@ -573,11 +832,18 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
         }
 
         // C. Configure Artifacts Object
-        if (isComposite || bc.publishArtifacts.isNotEmpty() || bc.parameters.isNotEmpty()) {
+        if (isComposite || bc.publishArtifacts.isNotEmpty() || bc.parameters.isNotEmpty() || bc.junitReports.isNotEmpty()) {
             val artifacts = generateArtifacts(bc).toMutableMap()
+            val reports = mutableMapOf<String, Any>()
             // Add dotenv report only if we actually exported parameters
             if (bc.parameters.isNotEmpty()) {
-                artifacts["reports"] = mutableMapOf("dotenv" to "build.env")
+                reports["dotenv"] = "build.env"
+            }
+            if (bc.junitReports.isNotEmpty()) {
+                reports["junit"] = bc.junitReports.map { it.path }
+            }
+            if (reports.isNotEmpty()) {
+                artifacts["reports"] = reports
             }
             runJob.artifacts = artifacts
         }
@@ -612,10 +878,12 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
             aggJob.script = listOf("echo 'Aggregating artifacts for ${bc.name}'")
 
             // Collect all artifacts produced by the matrix runs (already staged in namespace)
-            aggJob.artifacts = mutableMapOf(
-                "paths" to listOf("${getArtifactDirectoryOfBuild(bc.name)}/**"),
-                "when" to "always"
-            )
+            if (stagesFiles(bc)) {
+                aggJob.artifacts = mutableMapOf(
+                    "paths" to listOf("${getArtifactDirectoryOfBuild(bc.name)}**"),
+                    "when" to "always"
+                )
+            }
             aggJob.rules = generateRules(bc, pipelineSettings)
 
             result[aggJobName] = aggJob
@@ -635,6 +903,10 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
 
     // Precomputed mapping: local build name -> list of needs maps
     private var externalNeedsForBuild: Map<String, List<Map<String, Any>>> = emptyMap()
+
+    /** Identifiers of the schedules already reported to the user, see [createScheduleRule]. */
+    private val reportedSchedules = mutableSetOf<String>()
+    private val reportedOmittedTriggers = mutableSetOf<String>()
     private fun computeExternalDependencyAggregation(pipelineSettings: PipelineSettings): Map<String, ExternalAggregation> {
         val currentComponent = pipelineSettings.componentName
 
@@ -711,7 +983,7 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
             neededBuildJobs = data.upstreamJobs.map { toEnvToken(it) },
             defaultBranch = repoInfo.defaultBranch,
             startedByComponent = toEnvToken(pipelineSettings.componentName),
-            tags = listOf("shared-fi"),
+            tags = if (environmentHelper.areTagsDefined()) environmentHelper.getTags() else null,
             rules = rules,
             variablesFromEnv = variablesToPropagate
         )
@@ -788,8 +1060,7 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
                     Dependency.FailureAction.IGNORE,
                     Dependency.FailureAction.ADD_PROBLEM -> true
 
-                    Dependency.FailureAction.FAIL,
-                    Dependency.FailureAction.CANCEL -> false
+                    Dependency.FailureAction.FAIL -> false
                 }
 
                 val need = mapOf<String, Any>(
@@ -829,70 +1100,84 @@ class GitLab(override val dependencyManager: DependencyManager, envFile: File?) 
                 // Relative names are always local to the current component
                 depName
             }
-            val needsArtifacts = !dep.artifacts.isNullOrEmpty()
-
             val optionalNeed = when (dep.failureAction) {
                 Dependency.FailureAction.IGNORE,
                 Dependency.FailureAction.ADD_PROBLEM -> true
 
-                Dependency.FailureAction.FAIL,
-                Dependency.FailureAction.CANCEL -> false
+                Dependency.FailureAction.FAIL -> false
             }
 
             needs += mapOf<String, Any>(
                 "job" to targetName,
-                "artifacts" to needsArtifacts,
+                // Always download artifacts - the dotenv report carrying the dependency parameters is one of them
+                "artifacts" to true,
                 "optional" to optionalNeed
             )
         }
         return needs
     }
 
-    /** Generate shell lines to implement Dependency Artifacts copy phase per (s,d) mapping. */
+    /**
+     * Generate shell lines to implement Dependency Artifacts copy phase per (s,d) mapping.
+     * As in TeamCity, the job fails when a rule, or the archive path of an archive rule, matches no file,
+     * after reporting all such rules of the dependency. Otherwise it fails when an archive contains
+     * no file matching the path in the archive.
+     */
     private fun generateDependencyArtifactsCopy(bc: IBuildConfiguration): List<String> {
-        val lines = mutableListOf<String>()
-        if (bc.dependencies.isEmpty()) return lines
-        lines += "# Copy dependency artifacts per (s,d) with archive extraction"
-        bc.dependencies.forEach { dep ->
+        val artifactDependencies = bc.dependencies.filter { !it.artifacts.isNullOrEmpty() }
+        if (artifactDependencies.isEmpty()) return emptyList()
+        // Composite publishes the consumed artifacts, so it copies them directly into its staging directory
+        val destinationRoot = if (bc.type == IBuildConfiguration.Type.COMPOSITE) {
+            "\$CI_PROJECT_DIR/${getArtifactDirectoryOfBuild(bc.name)}"
+        } else {
+            "\$CI_PROJECT_DIR/"
+        }
+        val lines = mutableListOf("# Copy dependency artifacts per (s,d) with archive extraction", copyArtifactFunction)
+        artifactDependencies.forEach { dep ->
             val buildName = if (ProjectPath.isFullPath(dep.buildConfigurationName)) {
                 toEnvToken(dep.buildConfigurationName)
             } else {
                 dep.buildConfigurationName
             }
             val srcBuildConfiguration = getArtifactDirectoryOfBuild(buildName)
-            dep.artifacts?.forEach { art ->
-                val src = "${srcBuildConfiguration}${art.source}"
-                val dst = art.destination ?: "."
-                if (src.contains("!")) {
-                    // Archive extraction: <packagePath>!<pathInArchive>
-                    val parts = src.split("!", limit = 2)
-                    val pkg = parts[0]
-                    val inner = parts[1]
-                    // Try common archive types
+            lines += "missing_artifacts=''"
+            lines += "missing_extraction=''"
+            dep.artifacts!!.forEach { art ->
+                val dst = "$destinationRoot${art.destination ?: ""}"
+                if (art.source.contains("!")) {
+                    // Archive extraction: <packagePath>!<pathInArchive>, the path in the archive follows the same rule
+                    val (pkg, inner) = art.source.split("!", limit = 2)
+                    val (pkgBase, pkgPattern) = splitArtifactSource(pkg)
+                    val pkgDirectory = "$srcBuildConfiguration$pkgBase"
+                    val pkgPrefix = if (pkgBase.isEmpty()) "" else "$pkgBase/"
+                    lines += "packages=${'$'}(artifact_list \"$pkgDirectory\" ${shellQuote(toArtifactRegex(pkgPattern))})"
+                    lines += "if [ -z \"${'$'}packages\" ]; then missing_artifacts=\"${'$'}missing_artifacts,\"${shellQuote(pkg)}; fi"
+                    // Prints the archives containing no matching file
                     lines += """
-                        mkdir -p "$dst"
-                        tmpdir="_tempArtifactDir"
-                        mkdir ${'$'}tmpdir
-                        if [[ "$pkg" == *.zip ]]; then
-                          unzip -o "$pkg" -d "${'$'}tmpdir"
-                        elif [[ "$pkg" == *.tar.gz || "$pkg" == *.tgz ]]; then
-                          tar -xpf "$pkg" -C "${'$'}tmpdir"
-                        elif [[ "$pkg" == *.tar ]]; then
-                          tar -xpf "$pkg" -C "${'$'}tmpdir"
+                        unmatched=${'$'}(printf '%s\n' "${'$'}packages" | while IFS= read -r f; do
+                          if [ -z "${'$'}f" ]; then continue; fi
+                          tmpdir=${'$'}(mktemp -d)
+                          case "${'$'}f" in
+                            *.zip|*.jar) unzip -qo "$pkgDirectory/${'$'}f" -d "${'$'}tmpdir" ;;
+                            *.tar.gz|*.tgz|*.tar) tar -xpf "$pkgDirectory/${'$'}f" -C "${'$'}tmpdir" ;;
+                          esac
+                          copied=${'$'}(${copyArtifactCall("${'$'}tmpdir/", inner, dst)})
+                          rm -rf "${'$'}tmpdir"
+                          if [ -z "${'$'}copied" ]; then printf '%s\n' ${shellQuote(pkgPrefix)}"${'$'}f"; fi
+                        done)
+                        if [ -n "${'$'}unmatched" ] && [ -z "${'$'}missing_extraction" ]; then
+                          missing_extraction="No files matched for extraction patterns ["${shellQuote(inner)}"] while unpacking [${'$'}(printf '%s\n' "${'$'}unmatched" | head -n 1)]"
                         fi
-                        
-                        mkdir -p "$dst/"
-                        ( cd "${'$'}tmpdir" && cp -a --parents $inner ../$dst/ )
-                        rm -rf "${'$'}tmpdir"
                     """.trimIndent()
                 } else {
-                    // update to cp -a --parents, but make sure to namespace direcoty
-                    lines += """
-                        mkdir -p "$dst/"
-                        for f in ${src}; do cp -r "${'$'}f" "$dst" || true; done
-                    """.trimIndent()
+                    lines += "copied=${'$'}(${copyArtifactCall(srcBuildConfiguration, art.source, dst)})"
+                    lines += "if [ -z \"${'$'}copied\" ]; then missing_artifacts=\"${'$'}missing_artifacts,\"${shellQuote(art.source)}; fi"
                 }
             }
+            lines += "if [ -n \"${'$'}missing_artifacts\" ]; then " +
+                "echo \"No files matched for patterns \\\"${'$'}{missing_artifacts#,}\\\" from \"${shellQuote(dep.buildConfigurationName)}; exit 1; fi"
+            lines += "if [ -n \"${'$'}missing_extraction\" ]; then " +
+                "echo \"${'$'}missing_extraction from \"${shellQuote(dep.buildConfigurationName)}; exit 1; fi"
         }
         return lines
     }

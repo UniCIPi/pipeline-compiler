@@ -1,10 +1,10 @@
-package com.bringauto.pipelinecompiler
+package fanci.compiler
 
-import com.bringauto.pipelinecompiler.common.DiffAndBackup
-import com.bringauto.pipelinecompiler.generator.DependencyManager
-import com.bringauto.pipelinecompiler.generator.IPlatform
-import com.bringauto.pipelinecompiler.generator.ParameterReplacer
-import com.bringauto.pipelinecompiler.pipeline.Validator
+import fanci.compiler.common.DiffAndBackup
+import fanci.compiler.generator.DependencyManager
+import fanci.compiler.generator.IPlatform
+import fanci.compiler.generator.ParameterReplacer
+import fanci.compiler.pipeline.Validator
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.parameters.options.default
@@ -23,7 +23,7 @@ import kotlin.system.exitProcess
  * Defines the command-line interface for the pipeline generator.
  * Initializes the configuration data and platform based on the provided arguments.
  */
-class ArgParser : CliktCommand(name = "pipeline-generator") {
+class ArgParser : CliktCommand(name = "fanci-compiler") {
     val configFile by option("--configuration", help = "The config file to load").file(
         mustExist = true, canBeDir = false
     )
@@ -131,7 +131,7 @@ fun main(args: Array<String>) {
 
     println()
 
-    val tmpDir = Files.createTempDirectory("pipeline-generator")
+    val tmpDir = Files.createTempDirectory("fanci-compiler")
 
     for (pipelineSettings in inputParser.pipelineSettingsList) {
         try {
@@ -147,6 +147,8 @@ fun main(args: Array<String>) {
             platform.generatePipeline(pipelineSettings, tmpDir)
             // TODO maybe replace variables after generating files
             println("Pipeline generated successfully for project: ${pipelineSettings.componentName} in temporary directory\n")
+
+
         } catch (e: Exception) {
             everythingSuccessful = false
             println("Error during pipeline generation: ${e.message}")
@@ -188,3 +190,4 @@ fun main(args: Array<String>) {
     tmpDir.toFile()
         .deleteRecursively()
 }
+

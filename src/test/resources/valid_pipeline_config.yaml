@@ -3,9 +3,9 @@ component:
   repository: "https://github.com/example/repository.git"
   default-branch: "main"
   submodule-strategy: "recursive"
-  build:
+  build-configurations:
     - type: ScriptRunner
       configuration-name: "Example script"
-      scripts:
+      steps:
       - file: "example_script.sh"
         step-name: "Example step"

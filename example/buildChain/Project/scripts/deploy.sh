@@ -1,1 +1,0 @@
-echo "This is a script that deploys ComponentA to %pipelineGetParam(DEPLOY_ADDRESS)%"

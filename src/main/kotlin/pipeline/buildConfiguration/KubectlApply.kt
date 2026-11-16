@@ -1,18 +1,19 @@
-package com.bringauto.pipelinecompiler.pipeline.buildConfiguration
+package fanci.compiler.pipeline.buildConfiguration
 
-import com.bringauto.pipelinecompiler.configurationModel.BuildStepConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.KubectlApply
-import com.bringauto.pipelinecompiler.pipeline.BuildStep
-import com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration
-import com.bringauto.pipelinecompiler.pipeline.Parameter
+import fanci.compiler.configurationModel.BuildConfigurationDefinition
+import fanci.compiler.configurationModel.buildTypeDefinitions.KubectlApply
+import fanci.compiler.pipeline.BuildStep
+import fanci.compiler.pipeline.IBuildConfiguration
+import fanci.compiler.pipeline.Parameter
 
 /**
  * Generate a Kubernetes apply command for each file in the configuration.
  * Needs a kubeconfig file for authentication.
  */
-class KubectlApply(buildStepConfiguration: BuildStepConfiguration, override val buildTypeDefinition: KubectlApply)
-    : AbstractBuildConfiguration(buildStepConfiguration) {
+class KubectlApply(buildConfigurationDefinition: BuildConfigurationDefinition, override val buildTypeDefinition: KubectlApply)
+    : AbstractBuildConfiguration(buildConfigurationDefinition) {
     override val name = "Kubernetes Apply"
+    override var dockerImage = "alpine/kubectl:latest"
 
     override val buildSteps = createBuildSteps(buildTypeDefinition)
 
@@ -31,7 +32,7 @@ class KubectlApply(buildStepConfiguration: BuildStepConfiguration, override val 
                 BuildStep(
                     name = "apply kubeconfig",
                     script = """
-                        echo "${config.kubeconfig}" > %pipelineGetParam(KUBECONFIG_FILE)%
+                        echo "${config.kubeconfig}" > %fanciGetParam(KUBECONFIG_FILE)%
                     """.trimIndent()
                 )
             )
@@ -40,9 +41,8 @@ class KubectlApply(buildStepConfiguration: BuildStepConfiguration, override val 
                     BuildStep(
                         name = "Apply ${file.path}",
                         script = """
-                            KUBECONFIG=%pipelineGetParam(KUBECONFIG_FILE)% kubectl apply -f ${file.path}
+                            KUBECONFIG=%fanciGetParam(KUBECONFIG_FILE)% kubectl apply -f ${file.path}
                         """.trimIndent(),
-                        dockerImage = "alpine/kubectl:latest",
                         runConditions = file.condition?.let { listOf(it) } ?: emptyList(),
                     )
                 }

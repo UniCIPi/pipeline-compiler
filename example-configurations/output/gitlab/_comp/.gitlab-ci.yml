@@ -1,0 +1,154 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+B:
+  stage: default
+  image: debian:12
+  tags:
+  - docker
+  variables:
+    __comp__B__P: p0
+    __comp__B__Q: q0
+  before_script:
+  - "export P=\"${__comp__B__P}\""
+  - "export Q=\"${__comp__B__Q}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== s1 =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    echo "${P}" > p.txt
+    echo "Q=q1" >> build.env
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Staging published artifacts'
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - copy_artifact "" 'p\.txt' "$CI_PROJECT_DIR/.artifacts/B/" 'p.txt'
+  - echo '# Exporting parameters for B'
+  - "echo \"__comp__B__P=${P}\" >> build.env"
+  - "echo \"__comp__B__Q=${Q}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    changes:
+    - src/**
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'A-1'
+    when: on_success
+    variables:
+      __comp__B__P: sched
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(doc.*)$/
+    when: never
+    variables:
+      __comp__B__P: "${CI_COMMIT_REF_NAME}"
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH
+    when: on_success
+    variables:
+      __comp__B__P: "${CI_COMMIT_REF_NAME}"
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/B/**
+    when: always
+    reports:
+      dotenv: build.env
+A:run:
+  stage: default
+  image: debian:12
+  tags:
+  - docker
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - "# Copy dependency artifacts per (s,d) with archive extraction"
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - missing_artifacts=''
+  - missing_extraction=''
+  - copied=$(copy_artifact ".artifacts/B/" 'p\.txt' "$CI_PROJECT_DIR/" 'p.txt')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'p.txt'; fi"
+  - "if [ -n \"$missing_artifacts\" ]; then echo \"No files matched for patterns \\\"${missing_artifacts#,}\\\" from \"'B'; exit 1; fi"
+  - "if [ -n \"$missing_extraction\" ]; then echo \"$missing_extraction from \"'B'; exit 1; fi"
+  script:
+  - |
+    echo "== s1 =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    cat p.txt
+    echo "${__comp__B__Q}"
+    echo "${M}"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    changes:
+    - src/**
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'A-1'
+    when: on_success
+    variables:
+      __comp__B__P: sched
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  needs:
+  - job: B
+    artifacts: true
+    optional: false
+  parallel:
+    matrix:
+    - M:
+      - x
+      - "y"
+A:
+  stage: default
+  tags:
+  - docker
+  script:
+  - echo 'Aggregating artifacts for A'
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    changes:
+    - src/**
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'A-1'
+    when: on_success
+    variables:
+      __comp__B__P: sched
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  needs:
+  - job: A:run
+    artifacts: true
+    optional: false

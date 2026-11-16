@@ -1,19 +1,19 @@
-package com.bringauto.pipelinecompiler.pipeline.buildConfiguration
+package fanci.compiler.pipeline.buildConfiguration
 
-import com.bringauto.pipelinecompiler.configurationModel.BuildStepConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.ScriptRunner
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.ScriptSpecification
-import com.bringauto.pipelinecompiler.pipeline.BuildStep
-import java.io.File
+import fanci.compiler.configurationModel.BuildConfigurationDefinition
+import fanci.compiler.configurationModel.buildTypeDefinitions.ScriptRunner
+import fanci.compiler.configurationModel.buildTypeDefinitions.StepSpecification
+import fanci.compiler.pipeline.BuildStep
 
 
 /**
  * Special script runner build configuration.
- * The script content is stored outside of the pipeline-settings.yaml in a file.
- * It is used to add script content from a file for custom one-purpose build scripts.
+ * The script of a build step is either stored outside of the pipeline-settings.yaml in a file,
+ * or defined directly in the step configuration.
+ * It is used to add custom one-purpose build steps without creating a dedicated build type.
  */
-class ScriptRunner(buildStepConfiguration: BuildStepConfiguration, override val buildTypeDefinition: ScriptRunner)
-    : AbstractBuildConfiguration(buildStepConfiguration)
+class ScriptRunner(buildConfigurationDefinition: BuildConfigurationDefinition, override val buildTypeDefinition: ScriptRunner)
+    : AbstractBuildConfiguration(buildConfigurationDefinition)
 {
     override val name = buildTypeDefinition.configurationName
 
@@ -21,23 +21,33 @@ class ScriptRunner(buildStepConfiguration: BuildStepConfiguration, override val 
 
     override val publishArtifacts = buildTypeDefinition.publishArtifacts
 
+    override val junitReports = buildTypeDefinition.junitReports
+
     override val sshAgentKeyName = buildTypeDefinition.sshAgentKeyName
 
     override val parameters = buildTypeDefinition.parameters
 
-    /**
-     * Used save information about the script files that can be added later using addScriptFile
-     */
-    val scriptSpecifications = buildTypeDefinition.scripts
+    override val buildMatrix = buildTypeDefinition.matrix
 
-    fun addScriptFile(scriptSpecification: ScriptSpecification, scriptFile: File) {
+    /**
+     * Used to save information about the build steps whose scripts can be added later using addStep
+     */
+    val stepSpecifications = buildTypeDefinition.steps
+
+    /**
+     * Creates a build step from its specification and the given script content.
+     *
+     * @param stepSpecification specification of the build step and its environment
+     * @param script content of the script executed by the build step
+     */
+    fun addStep(stepSpecification: StepSpecification, script: String) {
         buildSteps.add(BuildStep(
-            scriptSpecification.stepName,
-            scriptFile.readText(),
-            scriptSpecification.dockerImage,
-            allowDockerInDocker = scriptSpecification.allowDockerInDocker,
-            dockerRunParameters = scriptSpecification.dockerArguments,
-            runConditions = scriptSpecification.runConditions,
+            stepSpecification.stepName,
+            script,
+            allowDockerInDocker = stepSpecification.allowDockerInDocker,
+            dockerRunParameters = stepSpecification.dockerArguments,
+            runConditions = stepSpecification.runConditions,
+            executionMode = stepSpecification.executionMode,
         ))
     }
 }

@@ -1,0 +1,30 @@
+# Parameter command experiment
+#
+# Checks that a parameter holding a shell command is evaluated the same on both platforms.
+# TeamCity substitutes %P% textually into the script before it runs, so the shell parses the value
+# as part of the script. GitLab replaces the reference by ${P}, so the shell only expands a variable,
+# the value is split into words but not parsed again (no pipes, redirections, quotes or $(...)).
+#
+# "Time" - parameter CMD = "date", step s1 runs the command and prints its result.
+#
+# Expected output, the same on TeamCity and GitLab:
+#   Current time: <output of date>
+#
+# The repository content is irrelevant, it is only checked out.
+
+component:
+  name: "::parameter-command"
+  repository: "https://gitlab.example.com/fanci/examples.git"
+  default-branch: main
+  submodule-strategy: none
+  build-configurations:
+  - type: ScriptRunner
+    configuration-name: "Time"
+    docker-image: "docker.io/library/alpine:3.20"
+    parameters:
+    - name: CMD
+      value: "date"
+    steps:
+    - step-name: "s1"
+      script-content: |
+        echo "Current time: $(%fanciGetParam(CMD)%)"

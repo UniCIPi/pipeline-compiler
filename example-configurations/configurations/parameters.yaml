@@ -1,0 +1,42 @@
+# Parameter values (Section "Dealing with Parameters" of the paper)
+#
+# A parameter value is a constant string, the input language does not interpret it. Its meaning
+# is given by its use. The two build configurations hold the two listings of the section.
+#
+# "Command"    - TIME_CMD holds a shell command. The script evaluates it when the build job runs,
+#                so build jobs print different times although TIME_CMD has the same value in all of them.
+# "References" - PACKAGE references the parameters N and BR, and BR references the standard parameter
+#                FANCI_BUILD_BRANCH. The references are expanded before the script runs,
+#                so the build jobs on the branch main print app-main.
+#
+# The repository content is irrelevant, it is only checked out.
+
+component:
+  name: "::parameters"
+  repository: "https://github.com/org/comp.git"
+  default-branch: main
+  build-configurations:
+  - configuration-name: "Command"
+    type: ScriptRunner
+    docker-image: "debian:12"
+    parameters:
+    - name: TIME_CMD
+      value: "date | tr a-z A-Z"
+    steps:
+    - step-name: "s1"
+      script-content: |
+        echo "$(eval "%fanciGetParam(TIME_CMD)%")"
+  - configuration-name: "References"
+    type: ScriptRunner
+    docker-image: "debian:12"
+    parameters:
+    - name: N
+      value: "app"
+    - name: BR
+      value: "%fanciGetParam(FANCI_BUILD_BRANCH)%"
+    - name: PACKAGE
+      value: "%fanciGetParam(N)%-%fanciGetParam(BR)%"
+    steps:
+    - step-name: "s1"
+      script-content: |
+        echo "%fanciGetParam(PACKAGE)%"

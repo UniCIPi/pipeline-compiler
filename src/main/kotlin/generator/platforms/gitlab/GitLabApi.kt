@@ -1,4 +1,6 @@
-package com.bringauto.pipelinecompiler.generator.platforms.gitlab
+package fanci.compiler.generator.platforms.gitlab
+
+import fanci.compiler.common.VCSHelper
 
 /**
  * Helper for emitting GitLab jobs that trigger a pipeline in another project
@@ -9,22 +11,6 @@ package com.bringauto.pipelinecompiler.generator.platforms.gitlab
  */
 object GitLabApi {
     /**
-     * Extract host from URI authority string when java.net.URI.host is null (e.g., underscores in host).
-     * Handles optional userinfo and port. Examples:
-     *  - git@gitlab._vpn.example.com:1999 -> gitlab._vpn.example.com
-     *  - gitlab._vpn.example.com:1999 -> gitlab._vpn.example.com
-     *  - gitlab._vpn.example.com -> gitlab._vpn.example.com
-     *  - user@gitlab._vpn.example.com -> gitlab._vpn.example.com
-     */
-    private fun parseHostFromAuthority(authority: String): String {
-        val withoutUser = authority.substringAfter('@', authority)
-        // Strip path part if any (unlikely in authority but be safe)
-        val beforeSlash = withoutUser.substringBefore('/')
-        // Then strip port
-        return beforeSlash.substringBefore(':')
-    }
-
-    /**
      * Multi-job variant: trigger upstream pipeline once and download artifacts for all [neededBuildJobs].
      */
     fun createTriggerUpstreamDependencyJob(
@@ -33,8 +19,8 @@ object GitLabApi {
         neededBuildJobs: List<String>,
         defaultBranch: String,
         startedByComponent: String,
-        apiBaseUrl: String = "https://gitlab.fi.muni.cz/api/v4",
-        tags: List<String>? = listOf("shared-fi"),
+        apiBaseUrl: String,
+        tags: List<String>? = null,
         rules: List<Map<String, Any>>? = null,
         variablesFromEnv: List<Pair<String, String>>? = null
     ): Pair<String, GitLab.GitLabJob> {
@@ -56,7 +42,7 @@ object GitLabApi {
             afterScript = null,
             rules = rules,
             artifacts = mutableMapOf(
-                "paths" to listOf("_artifacts/**/*"), "when" to "always"
+                "paths" to listOf("$artifactDirectory**/*"), "when" to "always"
             ),
             needs = null,
             trigger = null,
@@ -76,11 +62,11 @@ object GitLabApi {
         neededBuildJobs: List<String>,
         defaultBranch: String,
         startedByComponent: String,
-        tags: List<String>? = listOf("shared-fi"),
+        tags: List<String>? = null,
         rules: List<Map<String, Any>>? = null,
         variablesFromEnv: List<Pair<String, String>>? = null
     ): Pair<String, GitLab.GitLabJob> {
-        val parsed = parseGitLabRepository(repositoryUrl)
+        val parsed = VCSHelper.parseApi(repositoryUrl)
         return createTriggerUpstreamDependencyJob(
             triggeredComponentName = triggeredComponentName,
             targetProject = parsed.targetProject,
@@ -169,8 +155,8 @@ object GitLabApi {
                 curl --header "JOB-TOKEN: ${'$'}CI_JOB_TOKEN" "${'$'}CI_API_V4_URL/projects/${'$'}TARGET_PROJECT_ENCODED/jobs/artifacts/${'$'}BRANCH_TO_USE/download?job=${'$'}ENCODED_BUILD_JOB" --output "artifacts-from$jobName.zip" || true
                 tmpdir="$(mktemp -d)"
                 unzip -o "artifacts-from$jobName.zip" -d "${'$'}tmpdir" || true
-                mkdir -p _artifacts/$jobName/
-                cp -a "${'$'}tmpdir/_artifacts/$simpleName/." "_artifacts/$jobName/" || true
+                mkdir -p $artifactDirectory$jobName/
+                cp -a "${'$'}tmpdir/$artifactDirectory$simpleName/." "$artifactDirectory$jobName/" || true
                 rm -rf "${'$'}tmpdir" || true
             """.trimIndent()
         }
@@ -189,83 +175,4 @@ object GitLabApi {
             "--form variables[${paramName}]=\"${value}\""
         }.trimIndent()
     }
-
-    /**
-     * Parse a GitLab repository URL and extract:
-     *  - apiBaseUrl: <scheme>://<host>/api/v4 (or https://<host>/api/v4 for SSH URLs)
-     *  - targetProject: group/subgroup/project (without .git)
-     */
-    fun parseGitLabRepository(repositoryUrl: String): ParsedGitLabRepo {
-        val url = repositoryUrl.trim()
-        return if (url.startsWith("http://") || url.startsWith("https://")) {
-            // HTTP(S) form: https://host/group/sub/project(.git)
-            try {
-                val uri = java.net.URI(url)
-                val scheme = uri.scheme
-                val rawAuthority = uri.rawAuthority ?: ""
-                val hostFromUri = uri.host // may be null for RFC-invalid but commonly used hosts (e.g., underscores)
-                val host = hostFromUri ?: parseHostFromAuthority(rawAuthority)
-                // Path may start with '/'; strip and remove trailing .git
-                val path = (uri.path ?: "").trim('/').removeSuffix(".git")
-                ParsedGitLabRepo(
-                    apiBaseUrl = "$scheme://$host/api/v4", targetProject = path
-                )
-            } catch (e: Exception) {
-                // Fallback: best-effort parsing
-                val cleaned = url.removePrefix("https://").removePrefix("http://")
-                val firstSlash = cleaned.indexOf('/')
-                val host = if (firstSlash >= 0) cleaned.substring(0, firstSlash) else cleaned
-                val rest = if (firstSlash >= 0) cleaned.substring(firstSlash + 1) else ""
-                ParsedGitLabRepo(
-                    apiBaseUrl = "https://$host/api/v4", targetProject = rest.removeSuffix(".git")
-                )
-            }
-        } else if (url.startsWith("ssh://") || url.startsWith("git+ssh://")) {
-            // SSH URL form with scheme, optional user and port, e.g.:
-            //  - ssh://git@gitlab.example.com:1999/group/sub/project.git
-            //  - git+ssh://git@gitlab.example.com/group/sub/project.git
-            try {
-                val normalized = if (url.startsWith("git+ssh://")) url.replaceFirst("git+ssh://", "ssh://") else url
-                val uri = java.net.URI(normalized)
-                val rawAuthority = uri.rawAuthority ?: ""
-                val hostFromUri = uri.host
-                val host = hostFromUri ?: parseHostFromAuthority(rawAuthority)
-                // Path may start with '/'; strip and remove trailing .git
-                val path = (uri.path ?: "").trim('/').removeSuffix(".git")
-                ParsedGitLabRepo(
-                    // Intentionally map to HTTPS API base; SSH port is ignored for API
-                    apiBaseUrl = "https://$host/api/v4", targetProject = path
-                )
-            } catch (e: Exception) {
-                // Fallback to generic parsing below if URI fails
-                val cleaned = url.removePrefix("ssh://").removePrefix("git+ssh://")
-                val afterAt = cleaned.substringAfter('@', cleaned)
-                val hostAndPath = afterAt
-                val host = hostAndPath.substringBefore('/')
-                val path = hostAndPath.substringAfter('/', "").removeSuffix(".git")
-                ParsedGitLabRepo(
-                    apiBaseUrl = "https://$host/api/v4", targetProject = path
-                )
-            }
-        } else if (url.contains(":") && url.contains("@")) {
-            // SSH form: git@host:group/sub/project(.git)
-            val afterAt = url.substringAfter('@')
-            val host = afterAt.substringBefore(':')
-            val path = afterAt.substringAfter(':').removeSuffix(".git")
-            ParsedGitLabRepo(
-                apiBaseUrl = "https://$host/api/v4", targetProject = path
-            )
-        } else {
-            // Unknown form; attempt generic split
-            val cleaned = url.removeSuffix(".git")
-            val parts = cleaned.split('/')
-            val host = parts.getOrNull(0) ?: "gitlab.local"
-            val path = parts.drop(1).joinToString("/")
-            ParsedGitLabRepo(
-                apiBaseUrl = "https://$host/api/v4", targetProject = path
-            )
-        }
-    }
-
-    data class ParsedGitLabRepo(val apiBaseUrl: String, val targetProject: String)
 }

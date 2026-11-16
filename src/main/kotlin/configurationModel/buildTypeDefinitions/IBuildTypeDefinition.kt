@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions
+package fanci.compiler.configurationModel.buildTypeDefinitions
 
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
@@ -16,14 +16,13 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo
     JsonSubTypes.Type(value = GoTest::class, name = "GoTest"),
     JsonSubTypes.Type(value = GoPackage::class, name = "GoPackage"),
     JsonSubTypes.Type(value = PrintVariable::class, name = "PrintVariable"),
-    JsonSubTypes.Type(value = Packager::class, name = "Packager"),
-    JsonSubTypes.Type(value = StateSmurfTest::class, name = "StateSmurfTest"),
-    JsonSubTypes.Type(value = ZephyrBuild::class, name = "ZephyrBuild"),
-    JsonSubTypes.Type(value = ZephyrTests::class, name = "ZephyrTests"),
     JsonSubTypes.Type(value = Composite::class, name = "Composite"),
     JsonSubTypes.Type(value = ScriptRunner::class, name = "ScriptRunner"),
     JsonSubTypes.Type(value = DockerBuildAndPush::class, name = "DockerBuildAndPush"),
     JsonSubTypes.Type(value = KubectlApply::class, name = "KubectlApply"),
+    JsonSubTypes.Type(value = SemanticRelease::class, name = "SemanticRelease"),
+    JsonSubTypes.Type(value = PythonPackage::class, name = "PythonPackage"),
+    JsonSubTypes.Type(value = PyPiPublish::class, name = "PyPiPublish"),
     // Add other build types as needed
 )
 /**

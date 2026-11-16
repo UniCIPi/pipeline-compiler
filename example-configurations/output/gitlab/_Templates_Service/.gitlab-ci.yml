@@ -1,0 +1,248 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+Build:run:
+  stage: default
+  image: "${BUILD_IMAGE}"
+  tags:
+  - docker
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |-
+    echo "== build =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    rm -rf _build
+    mkdir _build && cd _build
+    cmake -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release ../
+    cmake --build . --parallel $(nproc)
+  - |-
+    echo "== test =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    cd "$CI_PROJECT_DIR/_build"
+    ctest --extra-verbose --output-junit junit-report.xml
+    cd "$CI_PROJECT_DIR/"
+  - |-
+    echo "== package =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    cd "$CI_PROJECT_DIR/_build"
+    cpack -B artifacts
+    rm -rf artifacts/_CPack_Packages
+    cd "$CI_PROJECT_DIR/"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Staging published artifacts'
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - copy_artifact "_build/artifacts" '.*' "$CI_PROJECT_DIR/.artifacts/Build/" ''
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(main|.*\.x)$/
+    when: on_success
+    variables:
+      __Templates__Service__Release__DRY_RUN: "false"
+  - if: $CI_PIPELINE_SOURCE == 'push'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Build/**
+    when: always
+    reports:
+      junit:
+      - _build/junit-report.xml
+  parallel:
+    matrix:
+    - BUILD_IMAGE:
+      - registry.example.com/org/build-ubuntu:24.04
+      - registry.example.com/org/build-debian:12
+Build:
+  stage: default
+  tags:
+  - docker
+  script:
+  - echo 'Aggregating artifacts for Build'
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(main|.*\.x)$/
+    when: on_success
+    variables:
+      __Templates__Service__Release__DRY_RUN: "false"
+  - if: $CI_PIPELINE_SOURCE == 'push'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Build/**
+    when: always
+  needs:
+  - job: Build:run
+    artifacts: true
+    optional: false
+Docker Build and Push:
+  stage: default
+  tags:
+  - docker
+  variables:
+    __Templates__Service__Docker_Build_and_Push__IMAGE_TAG: "${CI_COMMIT_REF_NAME}"
+    __Templates__Service__Docker_Build_and_Push__IMAGE_NAME: registry.example.com/org/service
+  before_script:
+  - "export IMAGE_TAG=\"${__Templates__Service__Docker_Build_and_Push__IMAGE_TAG}\""
+  - "export IMAGE_NAME=\"${__Templates__Service__Docker_Build_and_Push__IMAGE_NAME}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |-
+    echo "== Remove prefix with slashes from image tag =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    TAG="${IMAGE_TAG}"
+    echo "Removed slash from IMAGE_TAG"
+    echo "New tag = ${TAG##*/}"
+    echo "IMAGE_TAG=${TAG##*/}" >> build.env
+  - |-
+    echo "== build =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    docker build -f "Dockerfile" -t "${IMAGE_NAME}:${IMAGE_TAG}" .
+  - |-
+    echo "== push =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    docker push "${IMAGE_NAME}:${IMAGE_TAG}"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for Docker Build and Push'
+  - "echo \"__Templates__Service__Docker_Build_and_Push__IMAGE_TAG=${IMAGE_TAG}\" >> build.env"
+  - "echo \"__Templates__Service__Docker_Build_and_Push__IMAGE_NAME=${IMAGE_NAME}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: Build
+    artifacts: true
+    optional: false
+Kubernetes Apply:
+  stage: default
+  image: alpine/kubectl:latest
+  tags:
+  - docker
+  variables:
+    __Templates__Service__Kubernetes_Apply__KUBECONFIG_FILE: ./kubeconfig
+  before_script:
+  - "export KUBECONFIG_FILE=\"${__Templates__Service__Kubernetes_Apply__KUBECONFIG_FILE}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |-
+    echo "== apply kubeconfig =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    echo "${kubeconfig}" > ${KUBECONFIG_FILE}
+  - |-
+    echo "== Apply deploy/service.yaml =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    KUBECONFIG=${KUBECONFIG_FILE} kubectl apply -f deploy/service.yaml
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for Kubernetes Apply'
+  - "echo \"__Templates__Service__Kubernetes_Apply__KUBECONFIG_FILE=${KUBECONFIG_FILE}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: Docker Build and Push
+    artifacts: true
+    optional: false
+Release:
+  stage: default
+  image: registry.example.com/org/semantic-release:25
+  tags:
+  - docker
+  variables:
+    __Templates__Service__Release__TOKEN: release-token
+    __Templates__Service__Release__DRY_RUN: "true"
+    __Templates__Service__Release__RELEASE_RC_CONTENT: ewogICJicmFuY2hlcyIgOiBbIHsKICAgICJuYW1lIiA6ICJtYWluIgogIH0sIHsKICAgICJuYW1lIiA6ICIrKFswLTldKT8oLnsrKFswLTldKSx4fSkueCIKICB9IF0sCiAgInJlcG9zaXRvcnlVcmwiIDogImh0dHBzOi8vZ2l0aHViLmNvbS9vcmcvc2VydmljZS5naXQiLAogICJwbHVnaW5zIiA6IFsgWyAiQHNlbWFudGljLXJlbGVhc2UvY29tbWl0LWFuYWx5emVyIiwgewogICAgInByZXNldCIgOiAiY29udmVudGlvbmFsY29tbWl0cyIsCiAgICAicmVsZWFzZVJ1bGVzIiA6IFsgewogICAgICAicmVsZWFzZSIgOiAibWFqb3IiLAogICAgICAiYnJlYWtpbmciIDogdHJ1ZQogICAgfSwgewogICAgICAidHlwZSIgOiAiZmVhdCIsCiAgICAgICJyZWxlYXNlIiA6ICJtaW5vciIKICAgIH0sIHsKICAgICAgInR5cGUiIDogImZpeCIsCiAgICAgICJyZWxlYXNlIiA6ICJwYXRjaCIKICAgIH0sIHsKICAgICAgInR5cGUiIDogImRvY3MiLAogICAgICAicmVsZWFzZSIgOiAicGF0Y2giCiAgICB9LCB7CiAgICAgICJ0eXBlIiA6ICJwZXJmIiwKICAgICAgInJlbGVhc2UiIDogInBhdGNoIgogICAgfSwgewogICAgICAidHlwZSIgOiAicmV2ZXJ0IiwKICAgICAgInJlbGVhc2UiIDogInBhdGNoIgogICAgfSwgewogICAgICAidHlwZSIgOiAiY2hvcmUiLAogICAgICAicmVsZWFzZSIgOiAicGF0Y2giCiAgICB9LCB7CiAgICAgICJ0eXBlIiA6ICJjaG9yZSIsCiAgICAgICJzY29wZSIgOiAicmVsZWFzZSIsCiAgICAgICJyZWxlYXNlIiA6IGZhbHNlCiAgICB9LCB7CiAgICAgICJzY29wZSIgOiAibm8tcmVsZWFzZSIsCiAgICAgICJyZWxlYXNlIiA6IGZhbHNlCiAgICB9IF0KICB9IF0sIFsgIkBzZW1hbnRpYy1yZWxlYXNlL3JlbGVhc2Utbm90ZXMtZ2VuZXJhdG9yIiwgewogICAgInByZXNldCIgOiAiY29udmVudGlvbmFsY29tbWl0cyIsCiAgICAicHJlc2V0Q29uZmlnIiA6IHsKICAgICAgInR5cGVzIiA6IFsgewogICAgICAgICJ0eXBlIiA6ICJmZWF0IiwKICAgICAgICAic2VjdGlvbiIgOiAiTmV3IEZlYXR1cmVzIPCfmoAiCiAgICAgIH0sIHsKICAgICAgICAidHlwZSIgOiAiZml4IiwKICAgICAgICAic2VjdGlvbiIgOiAiQnVnIEZpeGVzIPCfkJvvuI8iCiAgICAgIH0sIHsKICAgICAgICAidHlwZSIgOiAiZG9jcyIsCiAgICAgICAgInNlY3Rpb24iIDogIkRvY3VtZW50YXRpb24gQ2hhbmdlcyDwn5OdIgogICAgICB9LCB7CiAgICAgICAgInR5cGUiIDogImNob3JlIiwKICAgICAgICAic2VjdGlvbiIgOiAiTWlzY2VsbGFuZW91cyBDaG9yZXMg8J+ShSIKICAgICAgfSwgewogICAgICAgICJ0eXBlIiA6ICJ0ZXN0IiwKICAgICAgICAic2VjdGlvbiIgOiAiVGVzdHMg8J+Toe+4jyIKICAgICAgfSwgewogICAgICAgICJ0eXBlIiA6ICJwZXJmIiwKICAgICAgICAic2VjdGlvbiIgOiAiUGVyZm9ybWFuY2UgSW1wcm92ZW1lbnRzIPCfmoTvuI8iCiAgICAgIH0sIHsKICAgICAgICAidHlwZSIgOiAiYnVpbGQiLAogICAgICAgICJzZWN0aW9uIiA6ICJCdWlsZCBzeXN0ZW0g8J+boO+4jyIKICAgICAgfSwgewogICAgICAgICJ0eXBlIiA6ICJjaSIsCiAgICAgICAgInNlY3Rpb24iIDogIkJ1aWxkIHN5c3RlbSDwn5ug77iPIgogICAgICB9IF0KICAgIH0KICB9IF0sIFsgIkBzZW1hbnRpYy1yZWxlYXNlL2NoYW5nZWxvZyIsIHsKICAgICJjaGFuZ2Vsb2dGaWxlIiA6ICJDSEFOR0VMT0cubWQiCiAgfSBdLCBbICJzZW1hbnRpYy1yZWxlYXNlLXJlcGxhY2UtcGx1Z2luIiwgewogICAgInJlcGxhY2VtZW50cyIgOiBbIHsKICAgICAgImZpbGVzIiA6IFsgInZlcnNpb24udHh0IiBdLAogICAgICAiZnJvbSIgOiAiXnZlcnNpb249LioiLAogICAgICAidG8iIDogInZlcnNpb249JHtuZXh0UmVsZWFzZS52ZXJzaW9ufSIsCiAgICAgICJyZXN1bHRzIiA6IFsgewogICAgICAgICJmaWxlIiA6ICJ2ZXJzaW9uLnR4dCIsCiAgICAgICAgImhhc0NoYW5nZWQiIDogdHJ1ZSwKICAgICAgICAibnVtTWF0Y2hlcyIgOiAxLAogICAgICAgICJudW1SZXBsYWNlbWVudHMiIDogMQogICAgICB9IF0sCiAgICAgICJjb3VudE1hdGNoZXMiIDogdHJ1ZQogICAgfSBdCiAgfSBdLCBbICJAc2VtYW50aWMtcmVsZWFzZS9naXRodWIiLCB7CiAgICAiYXNzZXRzIiA6IFsgewogICAgICAicGF0aCIgOiAiQ0hBTkdFTE9HLm1kIgogICAgfSBdCiAgfSBdLCBbICJAc2VtYW50aWMtcmVsZWFzZS9naXQiLCB7CiAgICAiYXNzZXRzIiA6IFsgInZlcnNpb24udHh0IiwgIkNIQU5HRUxPRy5tZCIgXSwKICAgICJtZXNzYWdlIiA6ICJjaG9yZShyZWxlYXNlKTogJHtuZXh0UmVsZWFzZS52ZXJzaW9ufSBbc2tpcCBjaV1cXG4ke25leHRSZWxlYXNlLm5vdGVzfSIKICB9IF0gXQp9
+  before_script:
+  - "export TOKEN=\"${__Templates__Service__Release__TOKEN}\""
+  - "export DRY_RUN=\"${__Templates__Service__Release__DRY_RUN}\""
+  - "export RELEASE_RC_CONTENT=\"${__Templates__Service__Release__RELEASE_RC_CONTENT}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |-
+    echo "== Create .releaserc.json =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    #!/bin/bash
+    set -e
+    printf '%s' "${RELEASE_RC_CONTENT}" | base64 -d > .releaserc.json
+  - |-
+    echo "== semantic-release =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    #!/bin/bash
+
+    export GH_TOKEN=${TOKEN}
+    DRY_RUN_FLAG=""
+    if [ ${DRY_RUN} = true ]; then
+      DRY_RUN_FLAG="--dry-run"
+    fi
+
+    semantic-release $DRY_RUN_FLAG
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for Release'
+  - "echo \"__Templates__Service__Release__TOKEN=${TOKEN}\" >> build.env"
+  - "echo \"__Templates__Service__Release__DRY_RUN=${DRY_RUN}\" >> build.env"
+  - "echo \"__Templates__Service__Release__RELEASE_RC_CONTENT=${RELEASE_RC_CONTENT}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(main|.*\.x)$/
+    when: on_success
+    variables:
+      __Templates__Service__Release__DRY_RUN: "false"
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: Build
+    artifacts: true
+    optional: false

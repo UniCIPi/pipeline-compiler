@@ -1,9 +1,9 @@
-package com.bringauto.pipelinecompiler
+package fanci.compiler
 
-import com.bringauto.pipelinecompiler.common.ProjectPath
-import com.bringauto.pipelinecompiler.configurationModel.InputConfiguration
-import com.bringauto.pipelinecompiler.pipeline.PipelineSettings
-import com.bringauto.pipelinecompiler.pipeline.buildConfiguration.ScriptRunner
+import fanci.compiler.common.ProjectPath
+import fanci.compiler.configurationModel.InputConfiguration
+import fanci.compiler.pipeline.PipelineSettings
+import fanci.compiler.pipeline.buildConfiguration.ScriptRunner
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
@@ -42,7 +42,7 @@ class InputParser {
      * @param configFile the configuration file to be parsed. It must be a valid file with the correct format.
      * @return the parsed PipelineSettings object containing the pipeline configuration derived from the input file.
      * @throws ParseException if the configuration file cannot be parsed or contains invalid data.
-     * @throws IllegalArgumentException if there is an error converting the parsed data to PipelineSettings or processing related scripts.
+     * @throws IllegalArgumentException if there is an error converting the parsed data to PipelineSettings or processing related step scripts.
      */
     fun parseInputConfigFile(configFile: File): PipelineSettings {
         val configData: InputConfiguration = try {
@@ -53,7 +53,7 @@ class InputParser {
 
         try {
             val pipelineSettings = PipelineSettings(configData)
-            inlineScriptsForComponent(configFile, pipelineSettings)
+            inlineStepScriptsForComponent(configFile, pipelineSettings)
             return pipelineSettings
         } catch (e: Exception) {
             throw IllegalArgumentException("Error processing configuration file '${configFile.name}' into pipeline settings: ${e.message}", e.cause)
@@ -110,29 +110,34 @@ class InputParser {
 
 
     /**
-     * Inlines script files for the specified component into the associated build configurations that
+     * Inlines step scripts for the specified component into the associated build configurations that
      * use script runners.
      *
      * This method processes the `buildConfigurations` from `PipelineSettings` to identify instances
-     * of `ScriptRunner`. For each `ScriptRunner` configuration, it resolves the corresponding script
-     * file in the `scripts` directory adjacent to the provided config file. The content of the
-     * script file is then added to the script runner's build steps.
+     * of `ScriptRunner`. For each build step of a `ScriptRunner` configuration, the script is taken
+     * either from the `script-content` defined directly in the step configuration, or, if the step
+     * defines a `file`, from the corresponding script file in the `scripts` directory adjacent to the
+     * provided config file. The resulting script is then added to the script runner's build steps.
      *
      * @param configFile the configuration file specifying the pipeline component.
      *                   It is used to resolve the `scripts` directory in the component's parent directory
-     * @param pipelineSettings the pipeline settings containing build configurations for which script
-     *                         files need to be resolved and inlined.
+     * @param pipelineSettings the pipeline settings containing build configurations for which step
+     *                         scripts need to be resolved and inlined.
      */
-    private fun inlineScriptsForComponent(configFile: File, pipelineSettings: PipelineSettings) {
+    private fun inlineStepScriptsForComponent(configFile: File, pipelineSettings: PipelineSettings) {
         val scriptsDir = configFile.parentFile.resolve(scriptsDir)
         val componentName = pipelineSettings.componentName
 
         pipelineSettings.buildConfigurations
             .filterIsInstance<ScriptRunner>()
             .forEach { runner ->
-                runner.scriptSpecifications.forEach { spec ->
-                    val scriptFile = resolveScriptFile(scriptsDir, spec.file, componentName)
-                    runner.addScriptFile(spec, scriptFile)
+                runner.stepSpecifications.forEach { spec ->
+                    val script = if (spec.isScriptInFile) {
+                        resolveScriptFile(scriptsDir, spec.file, componentName).readText()
+                    } else {
+                        spec.scriptContent
+                    }
+                    runner.addStep(spec, script)
                 }
             }
     }

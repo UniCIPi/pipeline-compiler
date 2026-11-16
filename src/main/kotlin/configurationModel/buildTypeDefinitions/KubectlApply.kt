@@ -1,6 +1,6 @@
-package com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions
+package fanci.compiler.configurationModel.buildTypeDefinitions
 
-import com.bringauto.pipelinecompiler.pipeline.BuildStep
+import fanci.compiler.pipeline.BuildStep
 
 /**
  * Apply a list of files to a kubernetes cluster.
@@ -17,7 +17,7 @@ data class KubectlApply(
      * Content of the kubeconfig file.
      * !! IMPORTANT SECURITY NOTE !!: Store this file as a secret parameter in the platform. Reference the parameter!!
      */
-    val kubeconfig: String = "%pipelineGetParam(kubeconfig)%"
+    val kubeconfig: String = "%fanciGetParam(kubeconfig)%"
 ) : IBuildTypeDefinition
 
 data class ApplyFile(

@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.common
+package fanci.compiler.common
 
 import com.github.difflib.DiffUtils
 import com.github.difflib.UnifiedDiffUtils

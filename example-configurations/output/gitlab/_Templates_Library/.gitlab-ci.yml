@@ -1,0 +1,153 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+Python Package:run:
+  stage: default
+  image: "${IMAGE}"
+  tags:
+  - docker
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |-
+    echo "== Lint =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    ruff check .
+  - |-
+    echo "== Install =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    poetry install
+  - |-
+    echo "== Type check =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    poetry run mypy .
+  - |-
+    echo "== Test =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    poetry run pytest --verbose --junitxml=junit-report.xml
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Staging published artifacts'
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - copy_artifact "artifacts" '.*' "$CI_PROJECT_DIR/.artifacts/Python_Package/" ''
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(v.*)$/
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'push'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Python_Package/**
+    when: always
+    reports:
+      junit:
+      - junit-report.xml
+  parallel:
+    matrix:
+    - IMAGE:
+      - registry.example.com/org/python-poetry:3.12
+      - registry.example.com/org/python-poetry:3.13
+Python Package:
+  stage: default
+  tags:
+  - docker
+  script:
+  - echo 'Aggregating artifacts for Python Package'
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(v.*)$/
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'push'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Python_Package/**
+    when: always
+  needs:
+  - job: Python Package:run
+    artifacts: true
+    optional: false
+PyPI Publish:
+  stage: default
+  image: registry.example.com/org/python-poetry:3.13
+  tags:
+  - docker
+  variables:
+    __Templates__Library__PyPI_Publish__PYPI_TOKEN: pypi-token
+  before_script:
+  - "export PYPI_TOKEN=\"${__Templates__Library__PyPI_Publish__PYPI_TOKEN}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |-
+    echo "== Build =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    poetry build
+  - |-
+    echo "== Publish =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    export POETRY_PYPI_TOKEN_PYPI=${PYPI_TOKEN}
+    poetry publish
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Staging published artifacts'
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - "copy_artifact \"dist\" '[^/]*' \"$CI_PROJECT_DIR/.artifacts/PyPI_Publish/\" ''"
+  - echo '# Exporting parameters for PyPI Publish'
+  - "echo \"__Templates__Library__PyPI_Publish__PYPI_TOKEN=${PYPI_TOKEN}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(v.*)$/
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/PyPI_Publish/**
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: Python Package
+    artifacts: true
+    optional: false

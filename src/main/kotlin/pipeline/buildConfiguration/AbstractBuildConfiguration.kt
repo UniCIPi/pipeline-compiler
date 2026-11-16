@@ -1,17 +1,17 @@
-package com.bringauto.pipelinecompiler.pipeline.buildConfiguration
+package fanci.compiler.pipeline.buildConfiguration
 
-import com.bringauto.pipelinecompiler.configurationModel.BuildStepConfiguration
-import com.bringauto.pipelinecompiler.pipeline.Dependency
-import com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.IBuildTypeDefinition
+import fanci.compiler.configurationModel.BuildConfigurationDefinition
+import fanci.compiler.pipeline.Dependency
+import fanci.compiler.pipeline.IBuildConfiguration
+import fanci.compiler.configurationModel.buildTypeDefinitions.IBuildTypeDefinition
 
 /**
  * Abstract base class for build configurations.
  * Initialize common properties and methods for all build configurations.
  *
- * @param config Configuration model for the build step.
+ * @param definition Input-layer definition of the build configuration.
  */
-abstract class AbstractBuildConfiguration(config: BuildStepConfiguration)
+abstract class AbstractBuildConfiguration(definition: BuildConfigurationDefinition)
     : IBuildConfiguration {
     /**
      * BuildTypeDefinition to override in subclasses.
@@ -19,9 +19,10 @@ abstract class AbstractBuildConfiguration(config: BuildStepConfiguration)
      */
     abstract val buildTypeDefinition: IBuildTypeDefinition
 
-    override val dependencies: List<Dependency> = config.dependencies
-    override val freeDiskSpaceGb: Int = config.freeSpaceGb
-    override val triggers = config.triggers
-    override val dockerConnections: List<String> = config.dockerConnections
-    override var buildNumberPattern = config.buildNumberPattern
+    override val dependencies: List<Dependency> = definition.dependencies
+    override val freeDiskSpaceGb: Int = definition.freeDiskSpaceGb
+    override var dockerImage: String = definition.dockerImage
+    override val triggers = definition.triggers
+    override val dockerConnections: List<String> = definition.dockerConnections
+    override var buildNumberPattern = definition.buildNumberPattern
 }

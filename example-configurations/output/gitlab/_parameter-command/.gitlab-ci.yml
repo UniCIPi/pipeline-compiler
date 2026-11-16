@@ -1,0 +1,33 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+Time:
+  stage: default
+  image: docker.io/library/alpine:3.20
+  tags:
+  - docker
+  variables:
+    __parameter_command__Time__CMD: date
+  before_script:
+  - "export CMD=\"${__parameter_command__Time__CMD}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== s1 =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    echo "Current time: $(${CMD})"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for Time'
+  - "echo \"__parameter_command__Time__CMD=${CMD}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env

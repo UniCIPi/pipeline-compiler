@@ -1,11 +1,11 @@
-package com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions
+package fanci.compiler.configurationModel.buildTypeDefinitions
 
 import com.fasterxml.jackson.annotation.JsonProperty
 
 /**
  * Runs Go tests using the specified Go version.
  *
- * @see com.bringauto.pipelinecompiler.pipeline.buildConfiguration.GoTest
+ * @see fanci.compiler.pipeline.buildConfiguration.GoTest
  */
 data class GoTest(
     @JsonProperty("go-version")

@@ -1,0 +1,285 @@
+# Artifact paths experiment
+#
+# Shows which part of the source path of an artifact is kept, for output and input artifacts,
+# for hidden files and for paths inside archives.
+# Both jobs use an Alpine image, so the GitLab scripts run in the POSIX sh of busybox, not in bash.
+#
+# "Publish" creates
+#   out/nested/deep/proof.txt                  - one file published with different forms of the source path,
+#   .hidden-out/proof.txt                      - the same file in a hidden directory, found only by the leading `**`,
+#   hidden/visible.txt, hidden/.dot.txt,
+#   hidden/.dotdir/inside.txt                  - hidden names, are they matched by wildcards and directories?
+#   empty-dir/                                 - an empty directory, published by a wildcard and as a directory,
+#   pkg/bundle.tgz, pkg/bundle.zip             - archives with inner/a.txt, inner/sub/b.txt, inner/.h.txt
+# and publishes each with its own destination directory. The resulting artifact tree is visible
+# in the platform UI (TeamCity: Artifacts tab, GitLab: job artifacts browser).
+#
+# "Inspect" downloads
+#   received/   - the whole tree by `**`,
+#   downloaded/ - 05-star-as-directory/nested/deep/proof.txt with the same forms of the source path as "Publish",
+#   hidden/     - the published hidden files, named explicitly or by wildcards,
+#   archive/    - files from inside the published archives (`archive!path`),
+# and prints all trees including hidden files.
+#
+# "MissingArtifacts" downloads with three input rules matching no file: a full path, a wildcard and
+# a path into an archive which was not published. It fails before its steps start with all of them
+# in one message (TeamCity does not keep the order of the rules):
+#   No files matched for patterns "05-star-as-directory/nested/deep/missing.txt,missing/*.txt,packages/missing.tgz"
+#
+# Rules matching no file, confirmed on TeamCity and GitLab:
+#   - an input rule fails the build before its steps start, a full path and a wildcard alike,
+#     also `*` and `**` from a dependency publishing nothing,
+#   - first all rules of a dependency are checked, a rule into an archive by its archive path only,
+#     and all unmatched ones are reported; then the archives are unpacked, and an archive without a file
+#     matching the path in it fails the build:
+#     No files matched for extraction patterns [inner/*.log] while unpacking [packages/bundle.tgz]
+#   - an output rule matching no file does not fail the build,
+#   - only files are published, an empty directory publishes nothing ("Publish" rules 16 and 17).
+#
+# Expected output, confirmed on TeamCity and GitLab: a file is copied by its name only, a directory by its content,
+# and with wildcards the path is kept from the first segment containing a wildcard.
+# Wildcards and directories match hidden names too, inside archives as well.
+#
+#   archive/01-tgz-double-star/.h.txt
+#   archive/01-tgz-double-star/a.txt
+#   archive/01-tgz-double-star/sub/b.txt
+#   archive/02-zip-double-star/.h.txt
+#   archive/02-zip-double-star/a.txt
+#   archive/02-zip-double-star/sub/b.txt
+#   archive/03-wildcard-package/.h.txt
+#   archive/03-wildcard-package/a.txt
+#   archive/04-hidden-explicit/.h.txt
+#   archive/05-directory/b.txt
+#   downloaded/01-file/proof.txt
+#   downloaded/02-directory/deep/proof.txt
+#   downloaded/03-directory-double-star/deep/proof.txt
+#   downloaded/04-star-in-file-name/proof.txt
+#   downloaded/05-star-as-directory/nested/deep/proof.txt
+#   downloaded/06-star-in-directory-name/nested/deep/proof.txt
+#   downloaded/07-double-star-in-middle/nested/deep/proof.txt
+#   downloaded/08-star-leading/05-star-as-directory/nested/deep/proof.txt
+#   hidden/01-explicit-file/.dot.txt
+#   hidden/02-star/.dot.txt
+#   hidden/03-explicit-directory/inside.txt
+#   hidden/04-dot-star/.dot.txt
+#   received/01-file/proof.txt
+#   received/02-directory/deep/proof.txt
+#   received/03-directory-double-star/deep/proof.txt
+#   received/04-star-in-file-name/proof.txt
+#   received/05-star-as-directory/nested/deep/proof.txt
+#   received/06-star-in-directory-name/nested/deep/proof.txt
+#   received/07-double-star-in-middle/nested/deep/proof.txt
+#   received/08-double-star-leading/.hidden-out/proof.txt
+#   received/08-double-star-leading/out/nested/deep/proof.txt
+#   received/09-hidden-directory/.dot.txt
+#   received/09-hidden-directory/.dotdir/inside.txt
+#   received/09-hidden-directory/visible.txt
+#   received/10-hidden-double-star/.dot.txt
+#   received/10-hidden-double-star/.dotdir/inside.txt
+#   received/10-hidden-double-star/visible.txt
+#   received/11-hidden-star/.dot.txt
+#   received/11-hidden-star/visible.txt
+#   received/12-hidden-explicit-file/.dot.txt
+#   received/13-hidden-explicit-directory/inside.txt
+#   received/14-hidden-dot-star/.dot.txt
+#   received/15-question-mark/nested/deep/proof.txt          (not yet run on TeamCity)
+#   received/packages/bundle.tgz
+#   received/packages/bundle.zip
+#   received/proof.txt
+#
+# The repository content is irrelevant, it is only checked out.
+
+component:
+  name: "::Artifact Paths::Output Artifacts"
+  repository: "https://gitlab.example.com/fanci/examples.git"
+  default-branch: main
+  submodule-strategy: none
+  pull-request:
+    enabled: false
+  build-configurations:
+    # -----------------------------------------------------------------------
+    # 1) Producer
+    #    Publishes the same file with different forms of the source path,
+    #    hidden files and archives.
+    # -----------------------------------------------------------------------
+    - type: ScriptRunner
+      configuration-name: "Publish"
+      docker-image: "docker.io/library/alpine:3.20"
+      steps:
+        - step-name: "Create the files"
+          script-content: |
+            set -eu
+            mkdir -p out/nested/deep
+            echo "proof" > out/nested/deep/proof.txt
+            mkdir -p .hidden-out
+            echo "proof" > .hidden-out/proof.txt
+            mkdir -p hidden/.dotdir
+            echo "visible" > hidden/visible.txt
+            echo "dot" > hidden/.dot.txt
+            echo "inside" > hidden/.dotdir/inside.txt
+            mkdir -p empty-dir
+            mkdir -p archive-content/inner/sub pkg
+            echo "a" > archive-content/inner/a.txt
+            echo "b" > archive-content/inner/sub/b.txt
+            echo "h" > archive-content/inner/.h.txt
+            tar -czf pkg/bundle.tgz -C archive-content inner
+            apk add --no-cache zip > /dev/null
+            (cd archive-content && zip -qr ../pkg/bundle.zip inner)
+            find out .hidden-out hidden pkg -type f | sort
+            find empty-dir -type d -empty
+      publish-artifacts:
+        # Exact file path without destination - published to the root of the artifacts.
+        - source: "out/nested/deep/proof.txt"
+        # Exact file path.
+        - source: "out/nested/deep/proof.txt"
+          destination: "01-file"
+        # Directory path - is the directory itself published, or only its content?
+        - source: "out/nested"
+          destination: "02-directory"
+        # Directory content selected by a trailing wildcard.
+        - source: "out/nested/**"
+          destination: "03-directory-double-star"
+        # Wildcard in the last segment (file name) only.
+        - source: "out/nested/deep/*.txt"
+          destination: "04-star-in-file-name"
+        # Wildcard replacing a whole directory segment in the middle of the path.
+        - source: "out/*/deep/proof.txt"
+          destination: "05-star-as-directory"
+        # Wildcard in a part of a directory name - is the whole segment kept, or only the part after the wildcard?
+        - source: "out/nest*/deep/proof.txt"
+          destination: "06-star-in-directory-name"
+        # Recursive wildcard in the middle of the path.
+        - source: "out/**/proof.txt"
+          destination: "07-double-star-in-middle"
+        # Recursive wildcard at the beginning of the path, also reaching into the hidden directory .hidden-out.
+        - source: "**/proof.txt"
+          destination: "08-double-star-leading"
+        # Hidden names: is .dot.txt or .dotdir/ part of the directory content?
+        - source: "hidden"
+          destination: "09-hidden-directory"
+        # Hidden names: does `**` match .dot.txt and .dotdir/?
+        - source: "hidden/**"
+          destination: "10-hidden-double-star"
+        # Hidden names: does `*` match a leading dot?
+        - source: "hidden/*.txt"
+          destination: "11-hidden-star"
+        # Hidden file named explicitly.
+        - source: "hidden/.dot.txt"
+          destination: "12-hidden-explicit-file"
+        # Hidden directory named explicitly, followed by a wildcard.
+        - source: "hidden/.dotdir/*"
+          destination: "13-hidden-explicit-directory"
+        # Wildcard after an explicit leading dot.
+        - source: "hidden/.*"
+          destination: "14-hidden-dot-star"
+        # Single character wildcard `?` in a directory name - is the path kept from this segment like with `*`?
+        - source: "out/neste?/deep/proof.txt"
+          destination: "15-question-mark"
+        # Empty directory by a wildcard - nothing is published.
+        - source: "empty-dir/*"
+          destination: "16-empty-dir-star"
+        # Empty directory as a directory - nothing is published, not even the directory.
+        - source: "empty-dir"
+          destination: "17-empty-dir"
+        # Archives, published as files.
+        - source: "pkg/*"
+          destination: "packages"
+
+    # -----------------------------------------------------------------------
+    # 2) Consumer
+    #    Downloads the artifacts of "Publish" with different forms of the source path
+    #    and prints the received trees.
+    # -----------------------------------------------------------------------
+    - type: ScriptRunner
+      configuration-name: "Inspect"
+      docker-image: "docker.io/library/alpine:3.20"
+      dependencies:
+        - build-configuration-name: "Publish"
+          failure-action: FAIL
+          artifacts:
+            # The leading wildcard keeps the full path, so the tree is received unchanged.
+            - source: "**"
+              destination: "received"
+            # The same forms of the source path as in "Publish", applied to one published file.
+            # Exact file path.
+            - source: "05-star-as-directory/nested/deep/proof.txt"
+              destination: "downloaded/01-file"
+            # Directory path - is the directory itself copied, or only its content?
+            - source: "05-star-as-directory/nested"
+              destination: "downloaded/02-directory"
+            # Directory content selected by a trailing wildcard.
+            - source: "05-star-as-directory/nested/**"
+              destination: "downloaded/03-directory-double-star"
+            # Wildcard in the last segment (file name) only.
+            - source: "05-star-as-directory/nested/deep/*.txt"
+              destination: "downloaded/04-star-in-file-name"
+            # Wildcard replacing a whole directory segment in the middle of the path.
+            - source: "05-star-as-directory/*/deep/proof.txt"
+              destination: "downloaded/05-star-as-directory"
+            # Wildcard in a part of a directory name.
+            - source: "05-star-as-directory/nest*/deep/proof.txt"
+              destination: "downloaded/06-star-in-directory-name"
+            # Recursive wildcard in the middle of the path.
+            - source: "05-star-as-directory/**/proof.txt"
+              destination: "downloaded/07-double-star-in-middle"
+            # Wildcard in the first segment - the full path is kept.
+            - source: "05-*/nested/deep/proof.txt"
+              destination: "downloaded/08-star-leading"
+            # Hidden file named explicitly.
+            - source: "12-hidden-explicit-file/.dot.txt"
+              destination: "hidden/01-explicit-file"
+            # Hidden names: does `*` match a leading dot?
+            - source: "12-hidden-explicit-file/*"
+              destination: "hidden/02-star"
+            # Directory published from a hidden directory.
+            - source: "13-hidden-explicit-directory"
+              destination: "hidden/03-explicit-directory"
+            # Wildcard after an explicit leading dot.
+            - source: "14-hidden-dot-star/.*"
+              destination: "hidden/04-dot-star"
+            # Recursive wildcard inside a tar.gz archive.
+            - source: "packages/bundle.tgz!inner/**"
+              destination: "archive/01-tgz-double-star"
+            # Recursive wildcard inside a zip archive.
+            - source: "packages/bundle.zip!inner/**"
+              destination: "archive/02-zip-double-star"
+            # Wildcard in the archive name, both archives deliver the same file.
+            - source: "packages/bundle.*!inner/*.txt"
+              destination: "archive/03-wildcard-package"
+            # Hidden file inside an archive named explicitly.
+            - source: "packages/bundle.tgz!inner/.h.txt"
+              destination: "archive/04-hidden-explicit"
+            # Directory inside an archive - only its content is copied.
+            - source: "packages/bundle.tgz!inner/sub"
+              destination: "archive/05-directory"
+      steps:
+        - step-name: "Print the artifact trees"
+          script-content: |
+            set -eu
+            find archive downloaded hidden received -type f | sort
+
+    # -----------------------------------------------------------------------
+    # 3) Rules matching nothing
+    #    Fails before the build steps start, all three rules are reported.
+    # -----------------------------------------------------------------------
+    - type: ScriptRunner
+      configuration-name: "MissingArtifacts"
+      docker-image: "docker.io/library/alpine:3.20"
+      dependencies:
+        - build-configuration-name: "Publish"
+          failure-action: FAIL
+          artifacts:
+            # Full path of a file which was not published.
+            - source: "05-star-as-directory/nested/deep/missing.txt"
+              destination: "none/01-file"
+            # Wildcard matching no file.
+            - source: "missing/*.txt"
+              destination: "none/02-star"
+            # Archive which was not published, only its path is checked before unpacking.
+            - source: "packages/missing.tgz!inner/**"
+              destination: "none/03-archive"
+      steps:
+        - step-name: "Print the downloaded files"
+          script-content: |
+            set -eu
+            if [ -d none ]; then find none | sort; else echo "nothing downloaded"; fi

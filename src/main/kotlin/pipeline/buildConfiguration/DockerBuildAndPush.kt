@@ -1,17 +1,18 @@
-package com.bringauto.pipelinecompiler.pipeline.buildConfiguration
+package fanci.compiler.pipeline.buildConfiguration
 
-import com.bringauto.pipelinecompiler.configurationModel.BuildStepConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.DockerBuildAndPush
-import com.bringauto.pipelinecompiler.pipeline.BuildStep
-import com.bringauto.pipelinecompiler.pipeline.DisplayType
-import com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration
-import com.bringauto.pipelinecompiler.pipeline.TextParameter
+import fanci.compiler.configurationModel.BuildConfigurationDefinition
+import fanci.compiler.configurationModel.buildTypeDefinitions.DockerBuildAndPush
+import fanci.compiler.pipeline.BuildStep
+import fanci.compiler.pipeline.DisplayType
+import fanci.compiler.pipeline.IBuildConfiguration
+import fanci.compiler.pipeline.TextParameter
+import kotlin.io.path.Path
 
 /**
  * Build, test and package a CMake project.
  */
-class DockerBuildAndPush(buildStepConfiguration: BuildStepConfiguration, override val buildTypeDefinition: DockerBuildAndPush)
-    : AbstractBuildConfiguration(buildStepConfiguration) {
+class DockerBuildAndPush(buildConfigurationDefinition: BuildConfigurationDefinition, override val buildTypeDefinition: DockerBuildAndPush)
+    : AbstractBuildConfiguration(buildConfigurationDefinition) {
     override val name = "Docker Build and Push"
 
     override val buildSteps = createBuildSteps(buildTypeDefinition)
@@ -24,24 +25,68 @@ class DockerBuildAndPush(buildStepConfiguration: BuildStepConfiguration, overrid
             displayType = DisplayType.NORMAL,
             value = buildTypeDefinition.imageTag,
             description = "Image tag"
+        ),
+        TextParameter(
+            name = "IMAGE_NAME",
+            displayType = DisplayType.NORMAL,
+            value = buildTypeDefinition.imageName,
+            description = "Image name"
         )
     )
 
     private fun createBuildSteps(config: DockerBuildAndPush): List<BuildStep> {
         val buildSteps = mutableListOf(
+            /** If the Image tag contains slashes, the build fails. */
             BuildStep(
-                name = "build",
+                name = "Remove prefix with slashes from image tag",
                 script = """
-                    docker build -f "${config.dockerFilePath}" -t "${config.imageName}:%pipelineGetParam(IMAGE_TAG)%" .
-                """.trimIndent()
-            ),
+                    TAG="%fanciGetParam(IMAGE_TAG)%"
+                    echo "Removed slash from IMAGE_TAG"
+                    echo "New tag = ${"$"}{TAG##*/}"
+                    %fanciSetParam(IMAGE_TAG, ${"$"}{TAG##*/})%
+                """.trimIndent(),
+                runConditions = listOf(
+                    BuildStep.RunCondition(
+                        parameterName = "IMAGE_TAG",
+                        operation = BuildStep.Operation.Contains,
+                        value = "/",
+                    )
+                )
+            )
+        )
+
+        if (config.dockerBuildScript == null) {
+            buildSteps.add(
+                BuildStep(
+                    name = "build",
+                    script = """
+                        docker build -f "${
+                        Path(
+                            config.dockerContextDir,
+                            config.dockerFilePath
+                        ).normalize()
+                    }" -t "%fanciGetParam(IMAGE_NAME)%:%fanciGetParam(IMAGE_TAG)%" ${config.dockerContextDir}
+                    """.trimIndent()
+                ),
+            )
+        } else {
+            buildSteps.add(
+                BuildStep(
+                    name = "build",
+                    script = """
+                        bash ${config.dockerBuildScript} "%fanciGetParam(IMAGE_NAME)%" "%fanciGetParam(IMAGE_TAG)%"
+                    """.trimIndent()
+                )
+            )
+        }
+
+        buildSteps.add(
             BuildStep(
                 name = "push",
                 script = """
-                    docker push "${config.imageName}:%pipelineGetParam(IMAGE_TAG)%"
+                    docker push "%fanciGetParam(IMAGE_NAME)%:%fanciGetParam(IMAGE_TAG)%"
                 """.trimIndent()
-            )
-        )
+            ))
 
         return buildSteps
     }

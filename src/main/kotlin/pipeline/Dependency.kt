@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.pipeline
+package fanci.compiler.pipeline
 
 /**
  * Declares a relationship to another build configuration
@@ -11,7 +11,7 @@ package com.bringauto.pipelinecompiler.pipeline
 data class Dependency(
     /**
      * Name of the build configuration of dependency
-     * @referenceTo com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration.name
+     * @referenceTo fanci.compiler.pipeline.IBuildConfiguration.name
      */
     val buildConfigurationName: String,
     /**
@@ -21,12 +21,13 @@ data class Dependency(
     /**
      * Artifacts to be used from the dependency
      */
-    val artifacts: List<Artifact>?
+    val artifacts: List<Artifact>?,
+
+    val reuseBuilds: Boolean = false
 ) {
     enum class FailureAction {
         IGNORE, // Proceed as if dependency succeeded; do not fail the dependent build.
         ADD_PROBLEM, // Proceed, but mark a problem/warning in the dependent build (platform-specific behavior).
-        FAIL, // Fail the dependent build immediately if dependency failed/cancelled.
-        CANCEL // Cancel the dependent build if dependency failed/cancelled.
+        FAIL // Fail the dependent build immediately if dependency failed/cancelled.
     }
 }

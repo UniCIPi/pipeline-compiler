@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions
+package fanci.compiler.configurationModel.buildTypeDefinitions
 
 data class PrintVariable(
     val configurationVariable: String,

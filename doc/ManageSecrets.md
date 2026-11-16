@@ -59,7 +59,7 @@ The generator then checks if the Docker connection specified in the input config
 #### TeamCity
 
 All authentication secret names used in configuration must be defined in the environment file.
-This serves as a double check to make sure authentication will work as expected. See [Environment.kt](../src/main/kotlin/generator/platforms/teamcity/Environment.kt)
+This serves as a double check to make sure authentication will work as expected. See [TeamCityEnvironment.kt](../src/main/kotlin/generator/platforms/teamcity/TeamCityEnvironment.kt)
 
 > The environment file functionality can be expanded, right now it is a proof of concept.
 

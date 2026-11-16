@@ -1,7 +1,7 @@
-package com.bringauto.pipelinecompiler.generator
+package fanci.compiler.generator
 
-import com.bringauto.pipelinecompiler.common.ProjectPath
-import com.bringauto.pipelinecompiler.pipeline.PipelineSettings
+import fanci.compiler.common.ProjectPath
+import fanci.compiler.pipeline.PipelineSettings
 
 class DependencyManager {
     private val allBuildConfigurations: List<ProjectPath>

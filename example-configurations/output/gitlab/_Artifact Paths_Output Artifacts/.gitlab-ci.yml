@@ -1,0 +1,301 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+Publish:
+  stage: default
+  image: docker.io/library/alpine:3.20
+  tags:
+  - docker
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== Create the files =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    set -eu
+    mkdir -p out/nested/deep
+    echo "proof" > out/nested/deep/proof.txt
+    mkdir -p .hidden-out
+    echo "proof" > .hidden-out/proof.txt
+    mkdir -p hidden/.dotdir
+    echo "visible" > hidden/visible.txt
+    echo "dot" > hidden/.dot.txt
+    echo "inside" > hidden/.dotdir/inside.txt
+    mkdir -p empty-dir
+    mkdir -p archive-content/inner/sub pkg
+    echo "a" > archive-content/inner/a.txt
+    echo "b" > archive-content/inner/sub/b.txt
+    echo "h" > archive-content/inner/.h.txt
+    tar -czf pkg/bundle.tgz -C archive-content inner
+    apk add --no-cache zip > /dev/null
+    (cd archive-content && zip -qr ../pkg/bundle.zip inner)
+    find out .hidden-out hidden pkg -type f | sort
+    find empty-dir -type d -empty
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Staging published artifacts'
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - copy_artifact "out/nested/deep" 'proof\.txt' "$CI_PROJECT_DIR/.artifacts/Publish/" 'proof.txt'
+  - copy_artifact "out/nested/deep" 'proof\.txt' "$CI_PROJECT_DIR/.artifacts/Publish/01-file" 'proof.txt'
+  - copy_artifact "out" 'nested' "$CI_PROJECT_DIR/.artifacts/Publish/02-directory" 'nested'
+  - copy_artifact "out/nested" '.*' "$CI_PROJECT_DIR/.artifacts/Publish/03-directory-double-star" ''
+  - "copy_artifact \"out/nested/deep\" '[^/]*\\.txt' \"$CI_PROJECT_DIR/.artifacts/Publish/04-star-in-file-name\" ''"
+  - "copy_artifact \"out\" '[^/]*/deep/proof\\.txt' \"$CI_PROJECT_DIR/.artifacts/Publish/05-star-as-directory\" ''"
+  - "copy_artifact \"out\" 'nest[^/]*/deep/proof\\.txt' \"$CI_PROJECT_DIR/.artifacts/Publish/06-star-in-directory-name\" ''"
+  - "copy_artifact \"out\" '([^/]*/)*proof\\.txt' \"$CI_PROJECT_DIR/.artifacts/Publish/07-double-star-in-middle\" ''"
+  - "copy_artifact \"\" '([^/]*/)*proof\\.txt' \"$CI_PROJECT_DIR/.artifacts/Publish/08-double-star-leading\" ''"
+  - copy_artifact "" 'hidden' "$CI_PROJECT_DIR/.artifacts/Publish/09-hidden-directory" 'hidden'
+  - copy_artifact "hidden" '.*' "$CI_PROJECT_DIR/.artifacts/Publish/10-hidden-double-star" ''
+  - "copy_artifact \"hidden\" '[^/]*\\.txt' \"$CI_PROJECT_DIR/.artifacts/Publish/11-hidden-star\" ''"
+  - copy_artifact "hidden" '\.dot\.txt' "$CI_PROJECT_DIR/.artifacts/Publish/12-hidden-explicit-file" '.dot.txt'
+  - "copy_artifact \"hidden/.dotdir\" '[^/]*' \"$CI_PROJECT_DIR/.artifacts/Publish/13-hidden-explicit-directory\" ''"
+  - "copy_artifact \"hidden\" '\\.[^/]*' \"$CI_PROJECT_DIR/.artifacts/Publish/14-hidden-dot-star\" ''"
+  - "copy_artifact \"out\" 'neste[^/]/deep/proof\\.txt' \"$CI_PROJECT_DIR/.artifacts/Publish/15-question-mark\" ''"
+  - "copy_artifact \"empty-dir\" '[^/]*' \"$CI_PROJECT_DIR/.artifacts/Publish/16-empty-dir-star\" ''"
+  - copy_artifact "" 'empty-dir' "$CI_PROJECT_DIR/.artifacts/Publish/17-empty-dir" 'empty-dir'
+  - "copy_artifact \"pkg\" '[^/]*' \"$CI_PROJECT_DIR/.artifacts/Publish/packages\" ''"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Publish/**
+    when: always
+Inspect:
+  stage: default
+  image: docker.io/library/alpine:3.20
+  tags:
+  - docker
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - "# Copy dependency artifacts per (s,d) with archive extraction"
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - missing_artifacts=''
+  - missing_extraction=''
+  - copied=$(copy_artifact ".artifacts/Publish/" '.*' "$CI_PROJECT_DIR/received" '')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'**'; fi"
+  - copied=$(copy_artifact ".artifacts/Publish/05-star-as-directory/nested/deep" 'proof\.txt' "$CI_PROJECT_DIR/downloaded/01-file" 'proof.txt')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-star-as-directory/nested/deep/proof.txt'; fi"
+  - copied=$(copy_artifact ".artifacts/Publish/05-star-as-directory" 'nested' "$CI_PROJECT_DIR/downloaded/02-directory" 'nested')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-star-as-directory/nested'; fi"
+  - copied=$(copy_artifact ".artifacts/Publish/05-star-as-directory/nested" '.*' "$CI_PROJECT_DIR/downloaded/03-directory-double-star" '')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-star-as-directory/nested/**'; fi"
+  - "copied=$(copy_artifact \".artifacts/Publish/05-star-as-directory/nested/deep\" '[^/]*\\.txt' \"$CI_PROJECT_DIR/downloaded/04-star-in-file-name\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-star-as-directory/nested/deep/*.txt'; fi"
+  - "copied=$(copy_artifact \".artifacts/Publish/05-star-as-directory\" '[^/]*/deep/proof\\.txt' \"$CI_PROJECT_DIR/downloaded/05-star-as-directory\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-star-as-directory/*/deep/proof.txt'; fi"
+  - "copied=$(copy_artifact \".artifacts/Publish/05-star-as-directory\" 'nest[^/]*/deep/proof\\.txt' \"$CI_PROJECT_DIR/downloaded/06-star-in-directory-name\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-star-as-directory/nest*/deep/proof.txt'; fi"
+  - "copied=$(copy_artifact \".artifacts/Publish/05-star-as-directory\" '([^/]*/)*proof\\.txt' \"$CI_PROJECT_DIR/downloaded/07-double-star-in-middle\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-star-as-directory/**/proof.txt'; fi"
+  - "copied=$(copy_artifact \".artifacts/Publish/\" '05-[^/]*/nested/deep/proof\\.txt' \"$CI_PROJECT_DIR/downloaded/08-star-leading\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-*/nested/deep/proof.txt'; fi"
+  - copied=$(copy_artifact ".artifacts/Publish/12-hidden-explicit-file" '\.dot\.txt' "$CI_PROJECT_DIR/hidden/01-explicit-file" '.dot.txt')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'12-hidden-explicit-file/.dot.txt'; fi"
+  - "copied=$(copy_artifact \".artifacts/Publish/12-hidden-explicit-file\" '[^/]*' \"$CI_PROJECT_DIR/hidden/02-star\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'12-hidden-explicit-file/*'; fi"
+  - copied=$(copy_artifact ".artifacts/Publish/" '13-hidden-explicit-directory' "$CI_PROJECT_DIR/hidden/03-explicit-directory" '13-hidden-explicit-directory')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'13-hidden-explicit-directory'; fi"
+  - "copied=$(copy_artifact \".artifacts/Publish/14-hidden-dot-star\" '\\.[^/]*' \"$CI_PROJECT_DIR/hidden/04-dot-star\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'14-hidden-dot-star/.*'; fi"
+  - packages=$(artifact_list ".artifacts/Publish/packages" 'bundle\.tgz')
+  - "if [ -z \"$packages\" ]; then missing_artifacts=\"$missing_artifacts,\"'packages/bundle.tgz'; fi"
+  - |-
+    unmatched=$(printf '%s\n' "$packages" | while IFS= read -r f; do
+      if [ -z "$f" ]; then continue; fi
+      tmpdir=$(mktemp -d)
+      case "$f" in
+        *.zip|*.jar) unzip -qo ".artifacts/Publish/packages/$f" -d "$tmpdir" ;;
+        *.tar.gz|*.tgz|*.tar) tar -xpf ".artifacts/Publish/packages/$f" -C "$tmpdir" ;;
+      esac
+      copied=$(copy_artifact "$tmpdir/inner" '.*' "$CI_PROJECT_DIR/archive/01-tgz-double-star" '')
+      rm -rf "$tmpdir"
+      if [ -z "$copied" ]; then printf '%s\n' 'packages/'"$f"; fi
+    done)
+    if [ -n "$unmatched" ] && [ -z "$missing_extraction" ]; then
+      missing_extraction="No files matched for extraction patterns ["'inner/**'"] while unpacking [$(printf '%s\n' "$unmatched" | head -n 1)]"
+    fi
+  - packages=$(artifact_list ".artifacts/Publish/packages" 'bundle\.zip')
+  - "if [ -z \"$packages\" ]; then missing_artifacts=\"$missing_artifacts,\"'packages/bundle.zip'; fi"
+  - |-
+    unmatched=$(printf '%s\n' "$packages" | while IFS= read -r f; do
+      if [ -z "$f" ]; then continue; fi
+      tmpdir=$(mktemp -d)
+      case "$f" in
+        *.zip|*.jar) unzip -qo ".artifacts/Publish/packages/$f" -d "$tmpdir" ;;
+        *.tar.gz|*.tgz|*.tar) tar -xpf ".artifacts/Publish/packages/$f" -C "$tmpdir" ;;
+      esac
+      copied=$(copy_artifact "$tmpdir/inner" '.*' "$CI_PROJECT_DIR/archive/02-zip-double-star" '')
+      rm -rf "$tmpdir"
+      if [ -z "$copied" ]; then printf '%s\n' 'packages/'"$f"; fi
+    done)
+    if [ -n "$unmatched" ] && [ -z "$missing_extraction" ]; then
+      missing_extraction="No files matched for extraction patterns ["'inner/**'"] while unpacking [$(printf '%s\n' "$unmatched" | head -n 1)]"
+    fi
+  - "packages=$(artifact_list \".artifacts/Publish/packages\" 'bundle\\.[^/]*')"
+  - "if [ -z \"$packages\" ]; then missing_artifacts=\"$missing_artifacts,\"'packages/bundle.*'; fi"
+  - |-
+    unmatched=$(printf '%s\n' "$packages" | while IFS= read -r f; do
+      if [ -z "$f" ]; then continue; fi
+      tmpdir=$(mktemp -d)
+      case "$f" in
+        *.zip|*.jar) unzip -qo ".artifacts/Publish/packages/$f" -d "$tmpdir" ;;
+        *.tar.gz|*.tgz|*.tar) tar -xpf ".artifacts/Publish/packages/$f" -C "$tmpdir" ;;
+      esac
+      copied=$(copy_artifact "$tmpdir/inner" '[^/]*\.txt' "$CI_PROJECT_DIR/archive/03-wildcard-package" '')
+      rm -rf "$tmpdir"
+      if [ -z "$copied" ]; then printf '%s\n' 'packages/'"$f"; fi
+    done)
+    if [ -n "$unmatched" ] && [ -z "$missing_extraction" ]; then
+      missing_extraction="No files matched for extraction patterns ["'inner/*.txt'"] while unpacking [$(printf '%s\n' "$unmatched" | head -n 1)]"
+    fi
+  - packages=$(artifact_list ".artifacts/Publish/packages" 'bundle\.tgz')
+  - "if [ -z \"$packages\" ]; then missing_artifacts=\"$missing_artifacts,\"'packages/bundle.tgz'; fi"
+  - |-
+    unmatched=$(printf '%s\n' "$packages" | while IFS= read -r f; do
+      if [ -z "$f" ]; then continue; fi
+      tmpdir=$(mktemp -d)
+      case "$f" in
+        *.zip|*.jar) unzip -qo ".artifacts/Publish/packages/$f" -d "$tmpdir" ;;
+        *.tar.gz|*.tgz|*.tar) tar -xpf ".artifacts/Publish/packages/$f" -C "$tmpdir" ;;
+      esac
+      copied=$(copy_artifact "$tmpdir/inner" '\.h\.txt' "$CI_PROJECT_DIR/archive/04-hidden-explicit" '.h.txt')
+      rm -rf "$tmpdir"
+      if [ -z "$copied" ]; then printf '%s\n' 'packages/'"$f"; fi
+    done)
+    if [ -n "$unmatched" ] && [ -z "$missing_extraction" ]; then
+      missing_extraction="No files matched for extraction patterns ["'inner/.h.txt'"] while unpacking [$(printf '%s\n' "$unmatched" | head -n 1)]"
+    fi
+  - packages=$(artifact_list ".artifacts/Publish/packages" 'bundle\.tgz')
+  - "if [ -z \"$packages\" ]; then missing_artifacts=\"$missing_artifacts,\"'packages/bundle.tgz'; fi"
+  - |-
+    unmatched=$(printf '%s\n' "$packages" | while IFS= read -r f; do
+      if [ -z "$f" ]; then continue; fi
+      tmpdir=$(mktemp -d)
+      case "$f" in
+        *.zip|*.jar) unzip -qo ".artifacts/Publish/packages/$f" -d "$tmpdir" ;;
+        *.tar.gz|*.tgz|*.tar) tar -xpf ".artifacts/Publish/packages/$f" -C "$tmpdir" ;;
+      esac
+      copied=$(copy_artifact "$tmpdir/inner" 'sub' "$CI_PROJECT_DIR/archive/05-directory" 'sub')
+      rm -rf "$tmpdir"
+      if [ -z "$copied" ]; then printf '%s\n' 'packages/'"$f"; fi
+    done)
+    if [ -n "$unmatched" ] && [ -z "$missing_extraction" ]; then
+      missing_extraction="No files matched for extraction patterns ["'inner/sub'"] while unpacking [$(printf '%s\n' "$unmatched" | head -n 1)]"
+    fi
+  - "if [ -n \"$missing_artifacts\" ]; then echo \"No files matched for patterns \\\"${missing_artifacts#,}\\\" from \"'Publish'; exit 1; fi"
+  - "if [ -n \"$missing_extraction\" ]; then echo \"$missing_extraction from \"'Publish'; exit 1; fi"
+  script:
+  - |
+    echo "== Print the artifact trees =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    set -eu
+    find archive downloaded hidden received -type f | sort
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  needs:
+  - job: Publish
+    artifacts: true
+    optional: false
+MissingArtifacts:
+  stage: default
+  image: docker.io/library/alpine:3.20
+  tags:
+  - docker
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - "# Copy dependency artifacts per (s,d) with archive extraction"
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - missing_artifacts=''
+  - missing_extraction=''
+  - copied=$(copy_artifact ".artifacts/Publish/05-star-as-directory/nested/deep" 'missing\.txt' "$CI_PROJECT_DIR/none/01-file" 'missing.txt')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'05-star-as-directory/nested/deep/missing.txt'; fi"
+  - "copied=$(copy_artifact \".artifacts/Publish/missing\" '[^/]*\\.txt' \"$CI_PROJECT_DIR/none/02-star\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'missing/*.txt'; fi"
+  - packages=$(artifact_list ".artifacts/Publish/packages" 'missing\.tgz')
+  - "if [ -z \"$packages\" ]; then missing_artifacts=\"$missing_artifacts,\"'packages/missing.tgz'; fi"
+  - |-
+    unmatched=$(printf '%s\n' "$packages" | while IFS= read -r f; do
+      if [ -z "$f" ]; then continue; fi
+      tmpdir=$(mktemp -d)
+      case "$f" in
+        *.zip|*.jar) unzip -qo ".artifacts/Publish/packages/$f" -d "$tmpdir" ;;
+        *.tar.gz|*.tgz|*.tar) tar -xpf ".artifacts/Publish/packages/$f" -C "$tmpdir" ;;
+      esac
+      copied=$(copy_artifact "$tmpdir/inner" '.*' "$CI_PROJECT_DIR/none/03-archive" '')
+      rm -rf "$tmpdir"
+      if [ -z "$copied" ]; then printf '%s\n' 'packages/'"$f"; fi
+    done)
+    if [ -n "$unmatched" ] && [ -z "$missing_extraction" ]; then
+      missing_extraction="No files matched for extraction patterns ["'inner/**'"] while unpacking [$(printf '%s\n' "$unmatched" | head -n 1)]"
+    fi
+  - "if [ -n \"$missing_artifacts\" ]; then echo \"No files matched for patterns \\\"${missing_artifacts#,}\\\" from \"'Publish'; exit 1; fi"
+  - "if [ -n \"$missing_extraction\" ]; then echo \"$missing_extraction from \"'Publish'; exit 1; fi"
+  script:
+  - |
+    echo "== Print the downloaded files =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    set -eu
+    if [ -d none ]; then find none | sort; else echo "nothing downloaded"; fi
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  needs:
+  - job: Publish
+    artifacts: true
+    optional: false

@@ -1,13 +1,13 @@
 package generator
 
-import com.bringauto.pipelinecompiler.configurationModel.BuildStepConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.InputConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.SubmoduleStrategy
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.PrintVariable
-import com.bringauto.pipelinecompiler.generator.DependencyManager
-import com.bringauto.pipelinecompiler.pipeline.Dependency
-import com.bringauto.pipelinecompiler.pipeline.PipelineSettings
-import com.bringauto.pipelinecompiler.pipeline.Trigger
+import fanci.compiler.configurationModel.BuildConfigurationDefinition
+import fanci.compiler.configurationModel.InputConfiguration
+import fanci.compiler.configurationModel.SubmoduleStrategy
+import fanci.compiler.configurationModel.buildTypeDefinitions.PrintVariable
+import fanci.compiler.generator.DependencyManager
+import fanci.compiler.pipeline.Dependency
+import fanci.compiler.pipeline.PipelineSettings
+import fanci.compiler.pipeline.Trigger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -93,27 +93,25 @@ class DependencyManagerTest {
     private fun mkPipeline(componentName: String, deps: List<String>): PipelineSettings {
         val def = PrintVariable(configurationVariable = "x", promptVariable = "y")
         val depObjs = deps.map { name -> Dependency(name, Dependency.FailureAction.FAIL, artifacts = null) }
-        val bsc = BuildStepConfiguration(
+        val bsc = BuildConfigurationDefinition(
             buildTypeDefinition = def,
             dependencies = depObjs,
             triggers = emptyList<Trigger>(),
-            freeSpaceGb = 0,
+            freeDiskSpaceGb = 0,
             dockerConnections = emptyList(),
             buildNumberPattern = null
         )
 
         val input = InputConfiguration(
             variables = null,
-            component = com.bringauto.pipelinecompiler.configurationModel.Component(
+            component = fanci.compiler.configurationModel.Component(
                 name = componentName,
                 repository = "https://example.com/repo.git",
                 defaultBranch = "main",
                 vcsAuthMethod = null,
                 submoduleStrategy = SubmoduleStrategy.none,
-                build = listOf(bsc)
-            ),
-            systemDefinition = null,
-            releaseSteps = null
+                buildConfigurations = listOf(bsc)
+            )
         )
         return PipelineSettings(input)
     }

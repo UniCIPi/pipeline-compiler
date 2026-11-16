@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.generator.platforms.gitlab
+package fanci.compiler.generator.platforms.gitlab
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory

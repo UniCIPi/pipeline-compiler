@@ -7,5 +7,5 @@ This document explains the functionality and usage of individual fields in [IBui
 Matrix is a special type of parameter that allows the user to define a set of parameters.
 When a matrix is defined, the pipeline will be executed for each combination of parameters.
 
-The value of the matrix parameter can be used in build using get parameter function - `%pipelineGetParam(matrixKey)%`
+The value of the matrix parameter can be used in build using get parameter function - `%fanciGetParam(matrixKey)%`
 This will get the value of matrix parameter for the current build.

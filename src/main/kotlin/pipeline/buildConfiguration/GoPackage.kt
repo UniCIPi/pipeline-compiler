@@ -1,10 +1,10 @@
-package com.bringauto.pipelinecompiler.pipeline.buildConfiguration
+package fanci.compiler.pipeline.buildConfiguration
 
-import com.bringauto.pipelinecompiler.pipeline.*
-import com.bringauto.pipelinecompiler.pipeline.DisplayType
-import com.bringauto.pipelinecompiler.pipeline.TextParameter
-import com.bringauto.pipelinecompiler.configurationModel.BuildStepConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.GoPackage
+import fanci.compiler.pipeline.*
+import fanci.compiler.pipeline.DisplayType
+import fanci.compiler.pipeline.TextParameter
+import fanci.compiler.configurationModel.BuildConfigurationDefinition
+import fanci.compiler.configurationModel.buildTypeDefinitions.GoPackage
 
 /**
  * Go build configuration.
@@ -13,14 +13,15 @@ import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.Go
  *
  * @param buildTypeDefinition GoBuild configuration
  */
-class GoPackage(buildStepConfiguration: BuildStepConfiguration, override val buildTypeDefinition: GoPackage) :
-    AbstractBuildConfiguration(buildStepConfiguration) {
+class GoPackage(buildConfigurationDefinition: BuildConfigurationDefinition, override val buildTypeDefinition: GoPackage) :
+    AbstractBuildConfiguration(buildConfigurationDefinition) {
     override val name = "Go Package"
-    override val matrix = mapOf(
+    override val buildMatrix = mapOf(
         "ARCHITECTURE" to buildTypeDefinition.archList.map { it.name },
         "SYSTEM" to buildTypeDefinition.systemList.map { it.name }
     )
-    private val dockerImage = "golang:${buildTypeDefinition.goVersion}"
+    // The whole build configuration runs in the Go toolchain image.
+    override var dockerImage = "golang:${buildTypeDefinition.goVersion}"
     override val parameters = listOf(
         TextParameter(
             name = "PACKAGE_NAME",
@@ -28,7 +29,7 @@ class GoPackage(buildStepConfiguration: BuildStepConfiguration, override val bui
             displayType = DisplayType.HIDDEN,
         )
     )
-    override val publishArtifacts = listOf(Artifact(source = "%pipelineGetParam(PACKAGE_NAME)%.zip"))
+    override val publishArtifacts = listOf(Artifact(source = "%fanciGetParam(PACKAGE_NAME)%.zip"))
     override val buildSteps = listOf(
         BuildStep(
             name = "build",
@@ -41,7 +42,7 @@ class GoPackage(buildStepConfiguration: BuildStepConfiguration, override val bui
                 
                 VERSION=${'$'}(sed -E -n 's/version=([^=]+)/\1/p' < version.txt)
                 MODULE_NAME=${'$'}(go list -m | awk -F/ '{print ${'$'}NF}')
-                PACKAGE_NAME=${'$'}{MODULE_NAME}_v${'$'}{VERSION}_%pipelineGetParam(SYSTEM)%-%pipelineGetParam(ARCHITECTURE)%
+                PACKAGE_NAME=${'$'}{MODULE_NAME}_v${'$'}{VERSION}_%fanciGetParam(SYSTEM)%-%fanciGetParam(ARCHITECTURE)%
                 
                 if [[ -d ${'$'}{PACKAGE_NAME}/ ]]; then
                   echo "ERROR: directory ${'$'}{PACKAGE_NAME}/ already exist." >&2
@@ -53,11 +54,10 @@ class GoPackage(buildStepConfiguration: BuildStepConfiguration, override val bui
                 fi
                 
                 export GOFLAGS="-buildvcs=false -a -ldflags=-w"
-                CGO_ENABLED=0 GOOS=%pipelineGetParam(SYSTEM)% GOARCH=%pipelineGetParam(ARCHITECTURE)% go build -o ./${'$'}{PACKAGE_NAME}/bin/ ./cmd/...
+                CGO_ENABLED=0 GOOS=%fanciGetParam(SYSTEM)% GOARCH=%fanciGetParam(ARCHITECTURE)% go build -o ./${'$'}{PACKAGE_NAME}/bin/ ./cmd/...
                 
-                %pipelineSetParam(PACKAGE_NAME, ${'$'}PACKAGE_NAME)%
-            """.trimIndent(),
-            dockerImage = dockerImage
+                %fanciSetParam(PACKAGE_NAME, ${'$'}PACKAGE_NAME)%
+            """.trimIndent()
         ),
         BuildStep(
             name = "package",
@@ -65,21 +65,20 @@ class GoPackage(buildStepConfiguration: BuildStepConfiguration, override val bui
                 #!/bin/bash
                 set -e
                 if [ -d "resources" ]; then
-                    cp -r resources/* ./%pipelineGetParam(PACKAGE_NAME)%/etc/
+                    cp -r resources/* ./%fanciGetParam(PACKAGE_NAME)%/etc/
                 fi
                 
                 if [ -d "doc" ]; then
-                    cp -r doc ./%pipelineGetParam(PACKAGE_NAME)%/
+                    cp -r doc ./%fanciGetParam(PACKAGE_NAME)%/
                 fi
                 
-                cp LICENSE ./%pipelineGetParam(PACKAGE_NAME)%/
-                cp README.md ./%pipelineGetParam(PACKAGE_NAME)%/
-                cp version.txt ./%pipelineGetParam(PACKAGE_NAME)%/
+                cp LICENSE ./%fanciGetParam(PACKAGE_NAME)%/
+                cp README.md ./%fanciGetParam(PACKAGE_NAME)%/
+                cp version.txt ./%fanciGetParam(PACKAGE_NAME)%/
                 
                 go install github.com/Melky-Phoe/gozip/cmd/gozip@v1.0.0
-                gozip -c "%pipelineGetParam(PACKAGE_NAME)%.zip" "./%pipelineGetParam(PACKAGE_NAME)%/"
-            """.trimIndent(),
-            dockerImage = dockerImage
+                gozip -c "%fanciGetParam(PACKAGE_NAME)%.zip" "./%fanciGetParam(PACKAGE_NAME)%/"
+            """.trimIndent()
         )
     )
 }

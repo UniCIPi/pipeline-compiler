@@ -1,0 +1,8 @@
+# GitLab environment: properties of the GitLab instance the generated configurations run on.
+# Tags of the runners executing the build jobs.
+tags:
+  - docker
+# Runners allowed to run Docker in Docker, used by build steps with `allow-docker-in-docker`.
+dind:
+  tags:
+    - docker-dind

@@ -1,0 +1,218 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+B:
+  stage: default
+  image: docker.io/library/debian:12
+  tags:
+  - docker
+  variables:
+    __Reverse_Dependency_Tree__Shared_Triggers__B__BUILD_ID: unset
+    __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: default
+  before_script:
+  - "export BUILD_ID=\"${__Reverse_Dependency_Tree__Shared_Triggers__B__BUILD_ID}\""
+  - "export StartedBy=\"${__Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== Report the build =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    set -eu
+    echo "B: build ${CI_PIPELINE_ID} on branch ${CI_COMMIT_REF_NAME} at $(date -u +%H:%M:%S)"
+    echo "B: StartedBy = ${StartedBy}"
+    echo "BUILD_ID=${CI_PIPELINE_ID}" >> build.env
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for B'
+  - "echo \"__Reverse_Dependency_Tree__Shared_Triggers__B__BUILD_ID=${BUILD_ID}\" >> build.env"
+  - "echo \"__Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy=${StartedBy}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: D
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'D-1'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: D-schedule
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: A
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(fix-.*)$/
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: A
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'A-1'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: A-schedule
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: C
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(fix-.*)$/
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: C
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'C-1'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: C-schedule
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env
+A:
+  stage: default
+  image: docker.io/library/debian:12
+  tags:
+  - docker
+  variables:
+    __Reverse_Dependency_Tree__Shared_Triggers__A__BUILD_ID: unset
+  before_script:
+  - "export BUILD_ID=\"${__Reverse_Dependency_Tree__Shared_Triggers__A__BUILD_ID}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== Report the build and the used build of B =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    set -e
+    echo "A: build ${CI_PIPELINE_ID} on branch ${CI_COMMIT_REF_NAME} at $(date -u +%H:%M:%S)"
+    echo "A: uses B build ${__Reverse_Dependency_Tree__Shared_Triggers__B__BUILD_ID}"
+    echo "BUILD_ID=${CI_PIPELINE_ID}" >> build.env
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for A'
+  - "echo \"__Reverse_Dependency_Tree__Shared_Triggers__A__BUILD_ID=${BUILD_ID}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: D
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'D-1'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: D-schedule
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: A
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(fix-.*)$/
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: A
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'A-1'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: A-schedule
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: B
+    artifacts: true
+    optional: false
+C:
+  stage: default
+  image: docker.io/library/debian:12
+  tags:
+  - docker
+  variables:
+    __Reverse_Dependency_Tree__Shared_Triggers__C__BUILD_ID: unset
+  before_script:
+  - "export BUILD_ID=\"${__Reverse_Dependency_Tree__Shared_Triggers__C__BUILD_ID}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== Report the build and the used build of B =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    set -e
+    echo "C: build ${CI_PIPELINE_ID} on branch ${CI_COMMIT_REF_NAME} at $(date -u +%H:%M:%S)"
+    echo "C: uses B build ${__Reverse_Dependency_Tree__Shared_Triggers__B__BUILD_ID}"
+    echo "BUILD_ID=${CI_PIPELINE_ID}" >> build.env
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for C'
+  - "echo \"__Reverse_Dependency_Tree__Shared_Triggers__C__BUILD_ID=${BUILD_ID}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: D
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'D-1'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: D-schedule
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: C
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH =~ /^(fix-.*)$/
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: C
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'C-1'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: C-schedule
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: B
+    artifacts: true
+    optional: false
+D:
+  stage: default
+  image: docker.io/library/debian:12
+  tags:
+  - docker
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |
+    echo "== Report the build and the used builds of A and C =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    set -e
+    echo "D: build ${CI_PIPELINE_ID} on branch ${CI_COMMIT_REF_NAME} at $(date -u +%H:%M:%S)"
+    echo "D: uses A build ${__Reverse_Dependency_Tree__Shared_Triggers__A__BUILD_ID}"
+    echo "D: uses C build ${__Reverse_Dependency_Tree__Shared_Triggers__C__BUILD_ID}"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH == 'main'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: D
+  - if: $CI_PIPELINE_SOURCE == 'schedule' && $__PIPELINE_GENERATOR_SCHEDULE == 'D-1'
+    when: on_success
+    variables:
+      __Reverse_Dependency_Tree__Shared_Triggers__B__StartedBy: D-schedule
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  needs:
+  - job: A
+    artifacts: true
+    optional: false
+  - job: C
+    artifacts: true
+    optional: false

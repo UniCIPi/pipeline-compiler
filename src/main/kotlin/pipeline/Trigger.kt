@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.pipeline
+package fanci.compiler.pipeline
 
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
@@ -37,46 +37,38 @@ open class Trigger(
 )
 
 /**
- * Trigger that reacts to changes in VCS. Allows filtering by branch, repository and changed files.
+ * Trigger that reacts to changes in the repository of one component. Allows filtering by branch and changed files.
  *
  * Included branches: Only changes in the included branches will trigger the build.
  */
 data class VcsTrigger(
-    val triggerRules: List<TriggerRule> = emptyList(),
-    override val includeBranches: List<String> = emptyList(),
-    override val excludeBranches: List<String> = emptyList(),
-    override val parameters: List<Parameter> = emptyList(),
-) : Trigger(parameters)
-
-/**
- * Additional trigger rule used in [VcsTrigger].
- * Defines which VCS root the VCS trigger should be attached
- * Defines which paths should be tracked and which paths should be excluded
- */
-data class TriggerRule(
     /**
-     * Fully qualified name of a component that contains the VCS root.
+     * Fully qualified name of the component whose repository is watched.
+     * When not set, the repository of the component owning the build configuration is watched.
      */
-    val vcsRootComponent: String = "",
+    val watchedComponent: String? = null,
     /**
      * Paths to track.
      * Supports Ant-style wildcards.
-     * Only Changes in tracked paths will trigger the build.
+     * Only changes in tracked paths will trigger the build.
      *
      * Unless an include path is specified, all changes will be tracked.
      */
     val includePaths: List<String> = emptyList(),
-    val excludePaths: List<String> = emptyList()
-) {
+    /** Paths to ignore. Supports Ant-style wildcards. */
+    val excludePaths: List<String> = emptyList(),
+    /**
+     * When set, this regex is added as a conjunctive condition to every include and exclude path.
+     * Uses Java regex; the commit message is matched with contains semantics (not full match).
+     */
+    val commitMessageRegex: String? = null,
+    override val includeBranches: List<String> = emptyList(),
+    override val excludeBranches: List<String> = emptyList(),
+    override val parameters: List<Parameter> = emptyList(),
+) : Trigger(parameters) {
     init {
-        require(includePaths.isNotEmpty() || excludePaths.isNotEmpty()) {
-            "TriggerRule must define at least one path in either include-paths or exclude-paths"
-        }
-
-        if (vcsRootComponent.isNotBlank()) {
-            require(includePaths.isNotEmpty()) {
-                "When specifying a vcs-root-component, the include-paths must be non-empty for determinism reasons"
-            }
+        require(watchedComponent == null || watchedComponent.isNotBlank()) {
+            "Watched component cannot be blank. Remove the field to watch the component owning the build configuration."
         }
     }
 }
@@ -91,6 +83,14 @@ data class TriggerRule(
  */
 data class ScheduleTrigger(
     val cron: String,
+    /**
+     * Optional name of the trigger, unique within the build configuration.
+     *
+     * On GitLab, the name identifies the pipeline schedule starting the build configuration, which protects
+     * the schedule from being disconnected when the triggers are reordered. Unnamed schedule triggers are
+     * identified by their order instead. On other platforms the name is used for identification only.
+     */
+    val name: String? = null,
     val withPendingChangesOnly: Boolean = false,
     override val includeBranches: List<String> = emptyList(),
     override val excludeBranches: List<String> = emptyList(),
@@ -99,6 +99,9 @@ data class ScheduleTrigger(
     init {
         require(cron.isNotBlank()) {
             "Cron expression cannot be blank"
+        }
+        require(name == null || name.isNotBlank()) {
+            "Schedule trigger name cannot be blank. Remove the field to identify the trigger by its order."
         }
 
         try {

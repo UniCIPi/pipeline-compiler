@@ -1,11 +1,11 @@
-package com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions
+package fanci.compiler.configurationModel.buildTypeDefinitions
 
-import com.bringauto.pipelinecompiler.pipeline.Parameter
+import fanci.compiler.pipeline.Parameter
 
 /**
  * Composite build type definition.
  *
- * @see com.bringauto.pipelinecompiler.pipeline.buildConfiguration.Composite
+ * @see fanci.compiler.pipeline.buildConfiguration.Composite
  */
 class Composite(
     /**

@@ -1,23 +1,31 @@
-package com.bringauto.pipelinecompiler.generator.platforms.teamcity
+package fanci.compiler.generator.platforms.teamcity
 
-import com.bringauto.pipelinecompiler.common.ProjectPath
-import com.bringauto.pipelinecompiler.pipeline.VcsAuthMethod
-import com.bringauto.pipelinecompiler.generator.DependencyManager
-import com.bringauto.pipelinecompiler.generator.platforms.teamcity.NamingUtils.createVcsRootClassName
-import com.bringauto.pipelinecompiler.pipeline.Artifact
-import com.bringauto.pipelinecompiler.pipeline.BuildStep
-import com.bringauto.pipelinecompiler.pipeline.Dependency
-import com.bringauto.pipelinecompiler.pipeline.DisplayType
-import com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration
-import com.bringauto.pipelinecompiler.pipeline.Parameter
-import com.bringauto.pipelinecompiler.pipeline.SelectParameter
-import com.bringauto.pipelinecompiler.pipeline.TextParameter
-import com.bringauto.pipelinecompiler.pipeline.Trigger
-import com.bringauto.pipelinecompiler.pipeline.VcsTrigger
-import com.bringauto.pipelinecompiler.pipeline.ScheduleTrigger
-import com.bringauto.pipelinecompiler.pipeline.FinishBuildTrigger
-import com.bringauto.pipelinecompiler.pipeline.Token
-import com.bringauto.pipelinecompiler.pipeline.UploadedKey
+import fanci.compiler.common.ProjectPath
+import fanci.compiler.common.VCSType
+import fanci.compiler.configurationModel.SubmoduleStrategy
+import fanci.compiler.pipeline.PipelineSettings
+import fanci.compiler.pipeline.PullRequestBranch
+import fanci.compiler.pipeline.PullRequestConfiguration
+import fanci.compiler.pipeline.VcsAuthMethod
+import fanci.compiler.generator.DependencyManager
+import fanci.compiler.generator.platforms.teamcity.NamingUtils.createVcsRootClassName
+import fanci.compiler.pipeline.Artifact
+import fanci.compiler.pipeline.BuildStep
+import fanci.compiler.pipeline.Dependency
+import fanci.compiler.pipeline.DisplayType
+import fanci.compiler.pipeline.IBuildConfiguration
+import fanci.compiler.pipeline.JUnitReport
+import fanci.compiler.pipeline.Parameter
+import fanci.compiler.pipeline.SelectParameter
+import fanci.compiler.pipeline.TextParameter
+import fanci.compiler.pipeline.Trigger
+import fanci.compiler.pipeline.VcsTrigger
+import fanci.compiler.pipeline.ScheduleTrigger
+import fanci.compiler.pipeline.FinishBuildTrigger
+import fanci.compiler.pipeline.SecretParameter
+import fanci.compiler.pipeline.RefreshableToken
+import fanci.compiler.pipeline.Token
+import fanci.compiler.pipeline.UploadedKey
 import com.cronutils.model.CronType
 import com.cronutils.model.definition.CronDefinitionBuilder
 import com.cronutils.model.field.CronFieldName
@@ -27,6 +35,7 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.TypeSpec
+import com.squareup.kotlinpoet.joinToCode
 import kotlin.collections.iterator
 
 /**
@@ -43,7 +52,12 @@ internal object KotlinBuilder {
      * - SSH key authentication
      */
     internal fun generateVcsFileSpec(
-        className: ClassName, normalizedName: String, vcsRootUrl: String, defaultBranch: String, authMethod: VcsAuthMethod?
+        className: ClassName,
+        normalizedName: String,
+        vcsRootUrl: String,
+        defaultBranch: String,
+        authMethod: VcsAuthMethod?,
+        submoduleStrategy: SubmoduleStrategy
     ): FileSpec {
         return FileSpec.builder(className)
             .suppressWarningTypes("RedundantVisibilityModifier")
@@ -61,11 +75,12 @@ internal object KotlinBuilder {
                             .addStatement(
                                 "branchSpec = %S\n", """
                                 |refs/heads/*
-                                |refs/tags/*
+                                |refs/(tags/*)
                             """.trimMargin()
                             )
                             .addStatement("useTagsAsBranches = true")
                             .addAuthMethod(authMethod)
+                            .addStatement("checkoutSubmodules = %T", ClassName("jetbrains.buildServer.configs.kotlin.vcs.GitVcsRoot.CheckoutSubmodules", translateSubmoduleStrategy(submoduleStrategy)))
                             .unindent()
                             .add("}")
                             .build()
@@ -120,11 +135,12 @@ internal object KotlinBuilder {
         buildConfiguration: IBuildConfiguration,
         className: ClassName,
         vcsRootClassName: ClassName,
-        dependencyManager: DependencyManager
+        dependencyManager: DependencyManager,
+        pipelineSettings: PipelineSettings
     ): FileSpec {
         val fileSpecBuilder = FileSpec.builder(className)
             .suppressWarningTypes("RedundantVisibilityModifier")
-            .addBuildStepImports(buildConfiguration)
+            .addBuildConfigurationImports(buildConfiguration)
             .indent("\t") // set file indentation to tab
 
         return fileSpecBuilder
@@ -141,10 +157,10 @@ internal object KotlinBuilder {
                             .addArtifactsRules(buildConfiguration.publishArtifacts)
                             .addVcsRootToBuildConfiguration(vcsRootClassName)
                             .addParameters(buildConfiguration.parameters)
-                            .addBuildSteps(buildConfiguration.buildSteps, dependencyManager)
-                            .addTriggers(buildConfiguration.triggers, dependencyManager)
+                            .addBuildSteps(buildConfiguration.buildSteps, buildConfiguration.dockerImage, dependencyManager)
+                            .addTriggers(buildConfiguration.triggers, dependencyManager, pipelineSettings)
                             .addDependencies(buildConfiguration.dependencies, dependencyManager)
-                            .addFeatures(buildConfiguration)
+                            .addFeatures(buildConfiguration, vcsRootClassName, pipelineSettings)
                             .unindent()
                             .add("}")
                             .build()
@@ -157,11 +173,11 @@ internal object KotlinBuilder {
     /**
      * Adds necessary kotlin imports for build steps and triggers.
      */
-    private fun FileSpec.Builder.addBuildStepImports(buildStep: IBuildConfiguration): FileSpec.Builder {
+    private fun FileSpec.Builder.addBuildConfigurationImports(buildConfiguration: IBuildConfiguration): FileSpec.Builder {
         this.addImport("jetbrains.buildServer.configs.kotlin.buildSteps", "script")
 
         // Add imports for triggers if they are present
-        buildStep.triggers.forEach { trigger ->
+        buildConfiguration.triggers.forEach { trigger ->
             when (trigger) {
                 is ScheduleTrigger -> this.addImport("jetbrains.buildServer.configs.kotlin.triggers", "schedule")
                 is VcsTrigger -> this.addImport("jetbrains.buildServer.configs.kotlin.triggers", "vcs")
@@ -184,6 +200,8 @@ internal object KotlinBuilder {
         indent()
         addStatement("root(%T)", vcsRootClassName)
         addStatement("cleanCheckout = true")
+        // Force Agent side checkout. Otherwise, the `.git` directory is not present in the work dir
+        addStatement("checkoutMode = %T", ClassName("jetbrains.buildServer.configs.kotlin.CheckoutMode", "ON_AGENT"))
         addStatement("showDependenciesChanges = true")
         unindent()
         addStatement("}")
@@ -193,7 +211,7 @@ internal object KotlinBuilder {
     private fun CodeBlock.Builder.addAuthMethod(authMethod: VcsAuthMethod?): CodeBlock.Builder {
         when (authMethod) {
             null -> this.addStatement("authMethod = anonymous()")
-            is Token -> {
+            is RefreshableToken -> {
                 this.addStatement("authMethod = token {")
                     .indent()
                     .addStatement("tokenId = %S", authMethod.tokenId)
@@ -201,6 +219,16 @@ internal object KotlinBuilder {
                 this.unindent()
                 this.addStatement("}")
             }
+
+            is Token -> {
+                this.addStatement("authMethod = password {")
+                    .indent()
+                    .addStatement("userName = %S", authMethod.username)
+                    .addStatement("password = %S", authMethod.tokenId)
+                    .unindent()
+                    .addStatement("}")
+            }
+
             is UploadedKey -> {
                 this.addStatement("authMethod = uploadedKey {")
                     .indent()
@@ -214,8 +242,15 @@ internal object KotlinBuilder {
 
     /**
      * Adds build steps to the BuildConfiguration Codeblock.
+     *
+     * TeamCity has no configuration-wide docker image, so the image of the build configuration is
+     * emitted on every step that does not define an image of its own.
      */
-    private fun CodeBlock.Builder.addBuildSteps(buildSteps: List<BuildStep>, dependencyManager: DependencyManager): CodeBlock.Builder {
+    private fun CodeBlock.Builder.addBuildSteps(
+        buildSteps: List<BuildStep>,
+        buildConfigurationDockerImage: String,
+        dependencyManager: DependencyManager
+    ): CodeBlock.Builder {
         this.addStatement("steps {")
             .indent()
         for (step in buildSteps) {
@@ -230,8 +265,8 @@ internal object KotlinBuilder {
                     when (cond.operation) {
                         BuildStep.Operation.Equal -> this.addStatement("equals(%S, %S)", left, cond.value)
                         BuildStep.Operation.NotEqual -> this.addStatement("doesNotEqual(%S, %S)", left, cond.value)
-                        BuildStep.Operation.Contain -> this.addStatement("contains(%S, %S)", left, cond.value)
-                        BuildStep.Operation.NotContain -> this.addStatement("doesNotContain(%S, %S)", left, cond.value)
+                        BuildStep.Operation.Contains -> this.addStatement("contains(%S, %S)", left, cond.value)
+                        BuildStep.Operation.NotContains -> this.addStatement("doesNotContain(%S, %S)", left, cond.value)
                     }
                 }
                 this.unindent()
@@ -241,10 +276,10 @@ internal object KotlinBuilder {
             if (step.workDir.isNotBlank()) {
                 this.addStatement("workingDir = %S", step.workDir)
             }
-            if (step.dockerImage.isNotBlank()) {
-                this.addStatement("dockerImage = %S", step.dockerImage)
+            if (buildConfigurationDockerImage.isNotBlank()) {
+                this.addStatement("dockerImage = %S", buildConfigurationDockerImage)
 
-                // Add docker run arguments only if dockerImage is set
+                // Add docker run arguments only if an image is set
                 var dockerRunParameters = ""
                 if (step.dockerRunParameters.isNotBlank()) {
                     dockerRunParameters = step.dockerRunParameters
@@ -255,6 +290,13 @@ internal object KotlinBuilder {
                 if (dockerRunParameters.isNotBlank()) {
                     this.addStatement("dockerRunParameters = %S", dockerRunParameters)
                 }
+            }
+            if (step.executionMode != BuildStep.ExecutionMode.OnSuccess) {
+                this.addStatement(
+                    "executionMode = %T.%L",
+                    ClassName("jetbrains.buildServer.configs.kotlin.BuildStep", "ExecutionMode"),
+                    translateExecutionMode(step.executionMode)
+                )
             }
 
             this.unindent()
@@ -282,11 +324,16 @@ internal object KotlinBuilder {
     /**
      * Adds build features to the BuildConfiguration Codeblock.
      */
-    private fun CodeBlock.Builder.addFeatures(buildConfiguration: IBuildConfiguration): CodeBlock.Builder {
+    private fun CodeBlock.Builder.addFeatures(
+        buildConfiguration: IBuildConfiguration,
+        vcsRootClassName: ClassName,
+        pipelineSettings: PipelineSettings
+    ): CodeBlock.Builder {
         this.addStatement("features {")
             .indent()
-        if (buildConfiguration.matrix.isNotEmpty()) {
-            this.addMatrix(buildConfiguration.matrix)
+        this.addPullRequests(vcsRootClassName, pipelineSettings)
+        if (buildConfiguration.buildMatrix.isNotEmpty()) {
+            this.addMatrix(buildConfiguration.buildMatrix)
         }
         if (buildConfiguration.freeDiskSpaceGb > 0) {
             this.addFreeDiskSpace(buildConfiguration.freeDiskSpaceGb)
@@ -297,9 +344,98 @@ internal object KotlinBuilder {
         if (buildConfiguration.sshAgentKeyName.isNotBlank()) {
             this.addSshAgent(buildConfiguration.sshAgentKeyName)
         }
+        if (buildConfiguration.junitReports.isNotEmpty()) {
+            this.addJUnitReports(buildConfiguration.junitReports)
+        }
         this.unindent()
             .addStatement("}")
         return this
+    }
+
+    /**
+     * Adds the pull requests feature to the BuildConfiguration Codeblock.
+     *
+     * The feature makes TeamCity monitor pull requests of the component VCS root and exposes every
+     * pull request as a logical branch (`merge-requests/<id>` for GitLab, `pull/<id>` for GitHub),
+     * so that triggers can react to it via the `mr/` branch pattern.
+     *
+     * The feature is skipped when the component disabled the pull request support or when the VCS host
+     * system has no TeamCity pull request provider. Both cases are reported by [TeamCity.checkPullRequestSupport].
+     */
+    private fun CodeBlock.Builder.addPullRequests(
+        vcsRootClassName: ClassName,
+        pipelineSettings: PipelineSettings
+    ): CodeBlock.Builder {
+        val configuration = pipelineSettings.pullRequestConfiguration
+        if (!configuration.enabled) {
+            return this
+        }
+        val provider = translatePullRequestProvider(pipelineSettings.vcsType) ?: return this
+
+        this.addStatement("%T {", ClassName("jetbrains.buildServer.configs.kotlin.buildFeatures", "pullRequests"))
+            .indent()
+            .addStatement("vcsRootExtId = \"\${%T.id}\"", vcsRootClassName)
+            .addStatement("provider = %L {", provider)
+            .indent()
+            .addPullRequestAuthType(configuration)
+
+        // TeamCity pull request filters accept fully qualified VCS branch names only
+        buildBranchRefFilter(configuration.includeSourceBranches, configuration.excludeSourceBranches)?.let {
+            this.addStatement("filterSourceBranch = %S", it)
+        }
+        buildBranchRefFilter(configuration.includeTargetBranches, configuration.excludeTargetBranches)?.let {
+            this.addStatement("filterTargetBranch = %S", it)
+        }
+
+        return this.unindent()
+            .addStatement("}")
+            .unindent()
+            .addStatement("}")
+    }
+
+    /**
+     * Adds the authentication used to read pull requests from the VCS host system API.
+     *
+     * A token configured in the component pull request section wins. Otherwise the credentials of the
+     * VCS root are reused, which is valid only for token based VCS authentication methods.
+     */
+    private fun CodeBlock.Builder.addPullRequestAuthType(configuration: PullRequestConfiguration): CodeBlock.Builder {
+        val tokenId = configuration.tokenId
+        if (tokenId != null) {
+            return this.addStatement("authType = token {")
+                .indent()
+                .addStatement("token = %S", tokenId)
+                .unindent()
+                .addStatement("}")
+        }
+        // Reuse the token of the VCS root. Non-token authentication methods are reported as a warning.
+        return this.addStatement("authType = vcsRoot()")
+    }
+
+    /**
+     * Builds a TeamCity branch filter from include/exclude branch patterns.
+     * Patterns are qualified to full VCS references, because pull request filters do not accept logical branch names.
+     *
+     * @return null when no filter is defined and the platform default (all branches) applies
+     */
+    private fun buildBranchRefFilter(include: List<String>, exclude: List<String>): String? {
+        if (include.isEmpty() && exclude.isEmpty()) {
+            return null
+        }
+        val lines = mutableListOf<String>()
+        // Without an explicit include, everything not excluded stays included
+        if (include.isEmpty()) {
+            lines.add("+:*")
+        }
+        include.forEach { lines.add("+:${toBranchRef(it)}") }
+        exclude.forEach { lines.add("-:${toBranchRef(it)}") }
+        return lines.joinToString("\n")
+    }
+
+    /** Qualifies a branch name to a full VCS reference, keeping already qualified references untouched. */
+    private fun toBranchRef(branch: String): String {
+        val trimmed = branch.trim()
+        return if (trimmed.startsWith("refs/")) trimmed else "refs/heads/$trimmed"
     }
 
     /**
@@ -382,6 +518,27 @@ internal object KotlinBuilder {
     }
 
     /**
+     * Adds one xmlReport build feature per JUnit report to the BuildConfiguration Codeblock.
+     * It is a build feature that publishes JUnit XML test results, making them visible in the TeamCity UI.
+     */
+    private fun CodeBlock.Builder.addJUnitReports(reports: List<JUnitReport>): CodeBlock.Builder {
+        reports.forEach { report ->
+            this.addStatement(
+                "%T {", ClassName("jetbrains.buildServer.configs.kotlin.buildFeatures", "xmlReport")
+            )
+                .indent()
+                .addStatement(
+                    "reportType = %T.JUNIT",
+                    ClassName("jetbrains.buildServer.configs.kotlin.buildFeatures.XmlReport", "XmlReportType")
+                )
+                .addStatement("rules = %S", report.path)
+                .unindent()
+                .addStatement("}")
+        }
+        return this
+    }
+
+    /**
      * Adds dependencies to the BuildConfiguration Codeblock.
      */
     private fun CodeBlock.Builder.addDependencies(
@@ -417,9 +574,10 @@ internal object KotlinBuilder {
                     )
                 )
                 .addStatement("synchronizeRevisions = true")
-                // Never reuse builds for snapshot dependencies, always builds the whole chain. This needs to be revised
-                .addStatement("reuseBuilds = %T", ClassName("jetbrains.buildServer.configs.kotlin.ReuseBuilds", "NO"))
-                .unindent()
+            if (!dependency.reuseBuilds) {
+                this.addStatement("reuseBuilds = %T", ClassName("jetbrains.buildServer.configs.kotlin.ReuseBuilds", "NO"))
+            }
+            this.unindent()
                 .addStatement("}")
 
             if (!dependency.artifacts.isNullOrEmpty()) {
@@ -504,6 +662,20 @@ internal object KotlinBuilder {
                 )
             }
 
+            is SecretParameter -> {
+                this.addStatement(
+                    "password(%S, %S, description = %S, label = %S, display = %T)",
+                    paramPath,
+                    param.value,
+                    param.description,
+                    param.label,
+                    ClassName(
+                        "jetbrains.buildServer.configs.kotlin.ParameterDisplay",
+                        translateParameterDisplay(param.displayType)
+                    )
+                )
+            }
+
             else -> {
                 this.addStatement("param(%S, %S)", paramPath, param.value)
             }
@@ -540,13 +712,17 @@ internal object KotlinBuilder {
      * Adds triggers to the BuildConfiguration Codeblock.
      * Triggers are used to define when the build configuration shall execute.
      */
-    private fun CodeBlock.Builder.addTriggers(triggers: List<Trigger>, dependencyManager: DependencyManager): CodeBlock.Builder {
+    private fun CodeBlock.Builder.addTriggers(
+        triggers: List<Trigger>,
+        dependencyManager: DependencyManager,
+        pipelineSettings: PipelineSettings
+    ): CodeBlock.Builder {
         if (triggers.isEmpty()) return this
         val blocks = triggers.mapNotNull { trigger ->
             when (trigger) {
-                is ScheduleTrigger -> buildCronTrigger(trigger)
-                is VcsTrigger -> buildVcsTrigger(trigger)
-                is FinishBuildTrigger -> buildFinishBuildTrigger(trigger, dependencyManager)
+                is ScheduleTrigger -> buildCronTrigger(trigger, pipelineSettings)
+                is VcsTrigger -> buildVcsTrigger(trigger, pipelineSettings)
+                is FinishBuildTrigger -> buildFinishBuildTrigger(trigger, dependencyManager, pipelineSettings)
                 else -> null
             }
         }
@@ -559,30 +735,40 @@ internal object KotlinBuilder {
         return this
     }
 
-    private fun buildVcsTrigger(vcsTrigger: VcsTrigger): CodeBlock {
-        var rootDefined = false
+    /**
+     * Builds a VCS trigger.
+     *
+     * A trigger watching another component restricts every rule to the VCS root of that component and watches
+     * the changes in dependencies, so TeamCity sees the commits of that VCS root.
+     * TeamCity includes all changes when no include rule is given, so without include paths, an include rule
+     * for all paths of the watched VCS root is added. Otherwise, the changes in all VCS roots of the dependencies
+     * would trigger the build.
+     */
+    private fun buildVcsTrigger(vcsTrigger: VcsTrigger, pipelineSettings: PipelineSettings): CodeBlock {
         val block = CodeBlock.Builder()
         block.addStatement("vcs {")
             .indent()
 
-        val triggerRulesBlocks = mutableListOf<CodeBlock>()
-        for (triggerRule in vcsTrigger.triggerRules) {
-            val rulePrefix = CodeBlock.builder()
-            if (triggerRule.vcsRootComponent.isNotEmpty()) {
-                rootDefined = true
-                val vcsRootClass = createVcsRootClassName(triggerRule.vcsRootComponent)
-                // Will render as: root=${VcsRootClass.id}:
-                rulePrefix.add("root=\${")
-                    .add("%T", vcsRootClass)
-                    .add(".id}:")
-            }
+        // TODO TeamCity watches only the VCS roots of the build configuration and of its snapshot dependencies.
+        //  The trigger never fires when the watched component is not a dependency of the build configuration.
+        val rootPrefix = vcsTrigger.watchedComponent?.let {
+            CodeBlock.builder().add("root=\${").add("%T", createVcsRootClassName(it)).add(".id}").build()
+        }
+        val conditions = listOfNotNull(rootPrefix, vcsTrigger.commitMessageRegex?.let { CodeBlock.of("comment=%L", it) })
+        val rulePrefix = CodeBlock.builder()
+        if (conditions.isNotEmpty()) {
+            rulePrefix.add(conditions.joinToCode(";")).add(":")
+        }
 
-            triggerRule.includePaths.forEach { path ->
-                triggerRulesBlocks.add(CodeBlock.builder().add("+:").add(rulePrefix.build()).add(path).build())
-            }
-            triggerRule.excludePaths.forEach { path ->
-                triggerRulesBlocks.add(CodeBlock.builder().add("-:").add(rulePrefix.build()).add(path).build())
-            }
+        val triggerRulesBlocks = mutableListOf<CodeBlock>()
+        if (rootPrefix != null && vcsTrigger.includePaths.isEmpty()) {
+            triggerRulesBlocks.add(CodeBlock.builder().add("+:").add(rootPrefix).add(":**").build())
+        }
+        vcsTrigger.includePaths.forEach { path ->
+            triggerRulesBlocks.add(CodeBlock.builder().add("+:").add(rulePrefix.build()).add(path).build())
+        }
+        vcsTrigger.excludePaths.forEach { path ->
+            triggerRulesBlocks.add(CodeBlock.builder().add("-:").add(rulePrefix.build()).add(path).build())
         }
         if (triggerRulesBlocks.isNotEmpty()) {
             block.addStatement("triggerRules = \"\"\"")
@@ -593,16 +779,16 @@ internal object KotlinBuilder {
             block.unindent()
                 .addStatement("\"\"\".trimIndent()")
         }
-        if (rootDefined) {
+        if (rootPrefix != null) {
             block.addStatement("watchChangesInDependencies = true")
         }
-        block.addTriggerCommonProperties(vcsTrigger)
+        block.addTriggerCommonProperties(vcsTrigger, pipelineSettings)
             .unindent()
             .addStatement("}")
         return block.build()
     }
 
-    private fun buildCronTrigger(scheduleTrigger: ScheduleTrigger): CodeBlock {
+    private fun buildCronTrigger(scheduleTrigger: ScheduleTrigger, pipelineSettings: PipelineSettings): CodeBlock {
         val cronDefinition = CronDefinitionBuilder.instanceDefinitionFor(CronType.UNIX)
         val parser = CronParser(cronDefinition)
         val cron = parser.parse(scheduleTrigger.cron)
@@ -626,13 +812,17 @@ internal object KotlinBuilder {
         block.addStatement("withPendingChangesOnly = %L", scheduleTrigger.withPendingChangesOnly)
             .addStatement("triggerBuild = always()")
         // Common trigger properties within schedule block
-        block.addTriggerCommonProperties(scheduleTrigger)
+        block.addTriggerCommonProperties(scheduleTrigger, pipelineSettings)
             .unindent()
             .addStatement("}")
         return block.build()
     }
 
-    private fun buildFinishBuildTrigger(finishTrigger: FinishBuildTrigger, dependencyManager: DependencyManager): CodeBlock {
+    private fun buildFinishBuildTrigger(
+        finishTrigger: FinishBuildTrigger,
+        dependencyManager: DependencyManager,
+        pipelineSettings: PipelineSettings
+    ): CodeBlock {
         val block = CodeBlock.Builder()
 
         // Resolve referenced build configuration similarly to dependencies resolution
@@ -649,13 +839,16 @@ internal object KotlinBuilder {
             block.addStatement("successfulOnly = true")
         }
         // Add common trigger properties (e.g., buildParams, branchFilter) if provided
-        block.addTriggerCommonProperties(finishTrigger)
+        block.addTriggerCommonProperties(finishTrigger, pipelineSettings)
             .unindent()
             .addStatement("}")
         return block.build()
     }
 
-    private fun CodeBlock.Builder.addTriggerCommonProperties(trigger: Trigger): CodeBlock.Builder {
+    private fun CodeBlock.Builder.addTriggerCommonProperties(
+        trigger: Trigger,
+        pipelineSettings: PipelineSettings
+    ): CodeBlock.Builder {
         this.addStatement("clearBuildParams()")
         if (trigger.parameters.isNotEmpty()) {
             this.addStatement("buildParams {")
@@ -666,25 +859,36 @@ internal object KotlinBuilder {
             this.unindent()
                 .addStatement("}")
         }
-        val include = trigger.includeBranches
-        val exclude = trigger.excludeBranches
+        val include = translateBranchPatterns(trigger.includeBranches, pipelineSettings)
+        val exclude = translateBranchPatterns(trigger.excludeBranches, pipelineSettings)
         if (include.isNotEmpty() || exclude.isNotEmpty()) {
             val lines = mutableListOf<String>()
-            if (include.isNotEmpty()) {
-                include.forEach { 
-                    val branch = if (it.startsWith("tags/")) "refs/$it" else it
-                    lines.add("+:$branch") 
-                }
-            }
-            if (exclude.isNotEmpty()) {
-                exclude.forEach { 
-                    val branch = if (it.startsWith("tags/")) "refs/$it" else it
-                    lines.add("-:$branch") 
-                }
-            }
+                include.forEach { lines.add("+:$it") }
+                exclude.forEach { lines.add("-:$it") }
             this.addStatement("branchFilter = %S", lines.joinToString("\n"))
+        } else {
+            // If no branch is defined, all are included
+            this.addStatement("branchFilter = %S", "+:*")
         }
         return this
+    }
+
+    /**
+     * Translates platform-independent branch patterns to TeamCity logical branch names.
+     *
+     * Pull request patterns (`mr/`) are mapped to the branch naming of the VCS host system, every other
+     * pattern is kept as is. Pull request patterns are dropped when the component has no usable pull
+     * request support, because the corresponding branches never appear in TeamCity.
+     * The reason is reported once per component by [TeamCity.checkPullRequestSupport].
+     */
+    private fun translateBranchPatterns(patterns: List<String>, pipelineSettings: PipelineSettings): List<String> {
+        return patterns.mapNotNull { pattern ->
+            when {
+                !PullRequestBranch.isPullRequestPattern(pattern) -> pattern
+                !pipelineSettings.pullRequestConfiguration.enabled -> null
+                else -> PullRequestBranch.translate(pattern, pipelineSettings.vcsType)
+            }
+        }
     }
 
     /**
@@ -706,7 +910,6 @@ internal object KotlinBuilder {
             Dependency.FailureAction.IGNORE -> "IGNORE"
             Dependency.FailureAction.ADD_PROBLEM -> "ADD_PROBLEM"
             Dependency.FailureAction.FAIL -> "FAIL_TO_START"
-            Dependency.FailureAction.CANCEL -> "CANCEL"
         }
     }
 
@@ -729,6 +932,36 @@ internal object KotlinBuilder {
             IBuildConfiguration.Type.REGULAR -> "REGULAR"
             IBuildConfiguration.Type.COMPOSITE -> "COMPOSITE"
             IBuildConfiguration.Type.DEPLOYMENT -> "DEPLOYMENT"
+        }
+    }
+
+    /**
+     * Convert the VCS host system to the name of the TeamCity pull request provider.
+     * TeamCity implements pull request providers for a limited set of host systems only.
+     *
+     * @return null when TeamCity has no pull request provider for the host system
+     */
+    internal fun translatePullRequestProvider(vcsType: VCSType): String? {
+        return when (vcsType) {
+            VCSType.GITLAB -> "gitlab"
+            VCSType.GITHUB -> "github"
+            VCSType.GITEA, VCSType.UNKNOWN -> null
+        }
+    }
+
+    private fun translateSubmoduleStrategy(strategy: SubmoduleStrategy): String {
+        return when (strategy) {
+            SubmoduleStrategy.recursive -> "SUBMODULES_CHECKOUT"
+            SubmoduleStrategy.shallow -> "NON_RECURSIVE_CHECKOUT"
+            SubmoduleStrategy.none -> "IGNORE"
+        }
+    }
+
+    private fun translateExecutionMode(mode: BuildStep.ExecutionMode): String {
+        return when (mode) {
+            BuildStep.ExecutionMode.OnSuccess -> "DEFAULT"
+            BuildStep.ExecutionMode.Always -> "ALWAYS"
+            BuildStep.ExecutionMode.OnFailure -> "RUN_ONLY_ON_FAILURE"
         }
     }
 

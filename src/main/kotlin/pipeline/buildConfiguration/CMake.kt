@@ -1,22 +1,26 @@
-package com.bringauto.pipelinecompiler.pipeline.buildConfiguration
+package fanci.compiler.pipeline.buildConfiguration
 
-import com.bringauto.pipelinecompiler.pipeline.*
-import com.bringauto.pipelinecompiler.configurationModel.BuildStepConfiguration
-import com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions.CMake
+import fanci.compiler.pipeline.*
+import fanci.compiler.configurationModel.BuildConfigurationDefinition
+import fanci.compiler.configurationModel.buildTypeDefinitions.CMake
 
 /**
  * Build, test and package a CMake project.
  */
-class CMake(buildStepConfiguration: BuildStepConfiguration, override val buildTypeDefinition: CMake)
-    : AbstractBuildConfiguration(buildStepConfiguration) {
-    override val name = "CMake"
-    override val matrix = mapOf("BUILD_IMAGE" to buildTypeDefinition.imageMatrix)
+class CMake(buildConfigurationDefinition: BuildConfigurationDefinition, override val buildTypeDefinition: CMake)
+    : AbstractBuildConfiguration(buildConfigurationDefinition) {
+    override val name = buildTypeDefinition.name
+    override var dockerImage = "%fanciGetParam(BUILD_IMAGE)%"
+    override val buildMatrix = mapOf("BUILD_IMAGE" to buildTypeDefinition.imageMatrix)
 
     private val workingDirectory = "_build"
+    private val packageDirectory = "artifacts"
+    private val junitReportFile = "junit-report.xml"
     /**
-     * All .zip files in the working directory will be collected as artifacts. This can be extended for other file types if needed.
+     * All files cpack places in the package directory will be collected as artifacts.
      */
-    override val publishArtifacts = if (buildTypeDefinition.createPackage) listOf(Artifact(source = "${workingDirectory}/*.zip")) else emptyList()
+    override val publishArtifacts = if (buildTypeDefinition.createPackage) listOf(Artifact(source = "$workingDirectory/$packageDirectory/**")) else emptyList()
+    override val junitReports = if (buildTypeDefinition.enableTests) listOf(JUnitReport(path = "$workingDirectory/$junitReportFile")) else emptyList()
     override val buildSteps = createBuildSteps(buildTypeDefinition)
 
     private fun createBuildSteps(config: CMake): List<BuildStep> {
@@ -29,9 +33,8 @@ class CMake(buildStepConfiguration: BuildStepConfiguration, override val buildTy
                 rm -rf $workingDirectory
                 mkdir $workingDirectory && cd $workingDirectory
                 cmake $parameters -DCMAKE_BUILD_TYPE=${config.buildType.name} ${config.cmakeListsDir}
-                cmake --build .
-            """.trimIndent(),
-            dockerImage = "%pipelineGetParam(BUILD_IMAGE)%"
+                cmake --build . --parallel $(nproc)
+            """.trimIndent()
 
         ))
 
@@ -39,9 +42,8 @@ class CMake(buildStepConfiguration: BuildStepConfiguration, override val buildTy
             buildSteps.add(BuildStep(
                 name = "test",
                 script = """
-                    ctest --extra-verbose
+                    ctest --extra-verbose --output-junit $junitReportFile
                 """.trimIndent(),
-                dockerImage = "%pipelineGetParam(BUILD_IMAGE)%",
                 workDir = workingDirectory
             ))
         }
@@ -50,9 +52,9 @@ class CMake(buildStepConfiguration: BuildStepConfiguration, override val buildTy
                 BuildStep(
                     name = "package",
                     script = """
-                    cpack
+                    cpack -B $packageDirectory
+                    rm -rf $packageDirectory/_CPack_Packages
                 """.trimIndent(),
-                    dockerImage = "%pipelineGetParam(BUILD_IMAGE)%",
                     workDir = workingDirectory
                 )
             )

@@ -1,11 +1,14 @@
-package com.bringauto.pipelinecompiler.generator.platforms.teamcity
+package fanci.compiler.generator.platforms.teamcity
 
-import com.bringauto.pipelinecompiler.common.ProjectPath
-import com.bringauto.pipelinecompiler.generator.DependencyManager
-import com.bringauto.pipelinecompiler.generator.IPlatform
-import com.bringauto.pipelinecompiler.generator.platforms.teamcity.NamingUtils.createVcsRootClassName
-import com.bringauto.pipelinecompiler.pipeline.IBuildConfiguration
-import com.bringauto.pipelinecompiler.pipeline.PipelineSettings
+import fanci.compiler.common.ProjectPath
+import fanci.compiler.generator.DependencyManager
+import fanci.compiler.generator.IPlatform
+import fanci.compiler.generator.platforms.teamcity.NamingUtils.createVcsRootClassName
+import fanci.compiler.pipeline.IBuildConfiguration
+import fanci.compiler.pipeline.PipelineSettings
+import fanci.compiler.pipeline.PullRequestBranch
+import fanci.compiler.pipeline.RefreshableToken
+import fanci.compiler.pipeline.Token
 import com.squareup.kotlinpoet.ClassName
 import java.io.File
 import java.nio.file.Path
@@ -43,6 +46,7 @@ class TeamCity(override val dependencyManager: DependencyManager, envFile: File?
         vcsRootClassName = createVcsRootClassName(pipelineSettings.componentName)
         buildTypesClassName = mutableMapOf()
         checkEnvFile()
+        checkPullRequestSupport()
 
         createBuildConfigurationsClassNames(pipelineSettings.buildConfigurations)
 
@@ -64,12 +68,61 @@ class TeamCity(override val dependencyManager: DependencyManager, envFile: File?
         // TODO check SSH keys...
     }
 
+    /**
+     * Reports the pull request support of the component once per generated pipeline.
+     *
+     * The pull requests build feature is generated for every build configuration, so it needs a token
+     * that can read pull requests from the VCS host system API. The token of the component VCS root is
+     * reused when it is a token based authentication method, otherwise it must be configured in the
+     * `component.pull-request` section.
+     */
+    private fun checkPullRequestSupport() {
+        val configuration = pipelineSettings.pullRequestConfiguration
+        val componentName = pipelineSettings.componentName
+        val usesPullRequestBranches = pipelineSettings.buildConfigurations.any { buildConfiguration ->
+            buildConfiguration.triggers.any { trigger ->
+                (trigger.includeBranches + trigger.excludeBranches).any { PullRequestBranch.isPullRequestPattern(it) }
+            }
+        }
+
+        if (!configuration.enabled) {
+            if (usesPullRequestBranches) {
+                println(
+                    "WARNING: [$componentName] Triggers use the '${PullRequestBranch.PREFIX}' branch pattern, " +
+                            "but pull request support is disabled in the component pull-request section. The patterns are ignored."
+                )
+            }
+            return
+        }
+
+        if (KotlinBuilder.translatePullRequestProvider(pipelineSettings.vcsType) == null) {
+            println(
+                "WARNING: [$componentName] TeamCity has no pull request provider for VCS host system " +
+                        "'${pipelineSettings.vcsType}' (repository '${pipelineSettings.vcsRootUrl}'). " +
+                        "The pull requests feature is not generated" +
+                        if (usesPullRequestBranches) " and '${PullRequestBranch.PREFIX}' trigger branches are ignored." else "."
+            )
+            return
+        }
+
+        val vcsAuthMethod = pipelineSettings.vcsAuthMethod
+        val vcsRootProvidesToken = vcsAuthMethod is Token || vcsAuthMethod is RefreshableToken
+        if (configuration.tokenId == null && !vcsRootProvidesToken) {
+            println(
+                "WARNING: [$componentName] Pull request support cannot reuse the VCS root credentials, " +
+                        "because the component vcs-auth-method does not define a token. " +
+                        "Configure 'component.pull-request.token-id' with a token that can read pull requests."
+            )
+        }
+    }
+
     override val platformParameters: Map<String, String> = mapOf(
-        IPlatform.StandardParameter.PIPELINE_BUILD_BRANCH.name to "teamcity.build.branch",
-        IPlatform.StandardParameter.PIPELINE_BUILD_NUMBER.name to "build.number",
-        IPlatform.StandardParameter.PIPELINE_BUILD_COUNTER.name to "build.counter",
-        IPlatform.StandardParameter.PIPELINE_DEFAULT_BRANCH.name to "vcsroot.branch",
-        IPlatform.StandardParameter.PIPELINE_COMPONENT_URL.name to "vcsroot.url"
+        IPlatform.StandardParameter.FANCI_BUILD_BRANCH.name to "teamcity.build.branch",
+        IPlatform.StandardParameter.FANCI_BUILD_NUMBER.name to "build.number",
+        IPlatform.StandardParameter.FANCI_BUILD_COUNTER.name to "build.counter",
+        IPlatform.StandardParameter.FANCI_DEFAULT_BRANCH.name to "vcsroot.branch",
+        IPlatform.StandardParameter.FANCI_COMPONENT_URL.name to "vcsroot.url",
+        IPlatform.StandardParameter.FANCI_CHECKOUT_DIR.name to "teamcity.build.checkoutDir",
     )
 
     /**
@@ -99,7 +152,7 @@ class TeamCity(override val dependencyManager: DependencyManager, envFile: File?
     override fun parameterSetFormat(parameterName: String, value: String): String {
         if (ProjectPath.isFullPath(parameterName)) {
             throw IllegalArgumentException("Setting a parameter by full path is not supported in TeamCity: $parameterName\n" +
-                    "Overriding arguments from preceding builds is allowed in Parameter.name. See ComponentChaining.md document for more information.")
+                    "Overriding arguments from preceding builds is allowed in Parameter.name. See BuildChaining.md document for more information.")
         }
         return "echo \"##teamcity[setParameter name='$parameterName' value='$value']\""
     }
@@ -122,7 +175,8 @@ class TeamCity(override val dependencyManager: DependencyManager, envFile: File?
             normalizedProjectName,
             pipelineSettings.vcsRootUrl,
             defaultBranch,
-            pipelineSettings.vcsAuthMethod
+            pipelineSettings.vcsAuthMethod,
+            pipelineSettings.submoduleStrategy
         )
         vcsFileSpec.writeTo(targetDirectory)
     }
@@ -152,7 +206,8 @@ class TeamCity(override val dependencyManager: DependencyManager, envFile: File?
             buildConfiguration,
             className,
             vcsRootClassName,
-            dependencyManager
+            dependencyManager,
+            pipelineSettings
         )
         buildConfigurationFileSpec.writeTo(targetDirectory)
     }

@@ -1,0 +1,71 @@
+# Predefined build configurations: build, packaging, deployment and release
+# (Section "Predefined CI/CD Configurations" of the paper)
+#
+# Every build configuration is a template selected by `type`. The templates define the build steps,
+# parameters and output artifacts; the configuration only sets their input fields and the fields common
+# to every build configuration (dependencies, triggers, docker-image).
+#
+# Dependency tree:
+#
+#     Kubernetes Apply
+#           |
+#     Docker Build and Push     Release
+#                    \           /
+#                        Build
+#
+# Build                 - CMake: builds, tests (ctest) and packages (cpack) the project in every image
+#                         of the matrix.
+# Docker Build and Push - builds the image of the service and pushes it to the registry, tagged by
+#                         the build branch.
+# Kubernetes Apply      - kubectl: applies the manifest to the cluster of the kubeconfig parameter.
+# Release               - semantic-release: a dry run by default; its default trigger watches the release
+#                         branches (main and N.x maintenance branches) and creates the release.
+#
+# The image names, the registry and the tokens are placeholders.
+
+component:
+  name: "::Templates::Service"
+  repository: "https://github.com/org/service.git"
+  default-branch: main
+  build-configurations:
+  - type: CMake
+    name: "Build"
+    image-matrix:
+    - "registry.example.com/org/build-ubuntu:24.04"
+    - "registry.example.com/org/build-debian:12"
+    build-type: Release
+    enable-tests: true
+    create-package: true
+    cmake-parameters:
+      BUILD_TESTS: "ON"
+    triggers:
+    - type: vcs
+      include-branches:
+      - "*"
+  - type: DockerBuildAndPush
+    image-name: "registry.example.com/org/service"
+    image-tag: "%fanciGetParam(FANCI_BUILD_BRANCH)%"
+    docker-connections:
+    - "registry"
+    dependencies:
+    - build-configuration-name: "Build"
+      failure-action: FAIL
+  - type: KubectlApply
+    files:
+    - path: "deploy/service.yaml"
+    dependencies:
+    - build-configuration-name: "Docker Build and Push"
+      failure-action: FAIL
+    triggers:
+    - type: vcs
+      include-branches:
+      - main
+  - type: SemanticRelease
+    configuration-name: "Release"
+    preset: "BringAuto"
+    docker-image: "registry.example.com/org/semantic-release:25"
+    repo-access-token-id: "release-token"
+    version-file-path: "version.txt"
+    dependencies:
+    - build-configuration-name: "Build"
+      failure-action: FAIL

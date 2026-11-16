@@ -1,9 +1,9 @@
-package com.bringauto.pipelinecompiler.configurationModel.buildTypeDefinitions
+package fanci.compiler.configurationModel.buildTypeDefinitions
 
 /**
  * Builds and Packages Go code using the specified Go version.
  *
- * @see com.bringauto.pipelinecompiler.pipeline.buildConfiguration.GoPackage
+ * @see fanci.compiler.pipeline.buildConfiguration.GoPackage
  */
 data class GoPackage(
     val goVersion: String = "1.24",

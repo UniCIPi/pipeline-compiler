@@ -1,6 +1,6 @@
 # GitLab Generator Implementation
 
-This document details the GitLab generator implementation of the formal model ([FormalDefinitions.md](FormalModel.md)). It outlines the mapping strategies, artifact handling, and specific constraints associated with the GitLab CI/CD platform.
+This document details the GitLab generator implementation of the formal model defined in the paper. It outlines the mapping strategies, artifact handling, and specific constraints associated with the GitLab CI/CD platform.
 
 The GitLab CI/CD generator will NOT support paid plans features.
 

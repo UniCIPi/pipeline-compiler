@@ -1,0 +1,205 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+Deploy Project:
+  stage: default
+  tags:
+  - docker
+  variables:
+    __Project__ComponentA__Deploy_Project__DEPLOY_MACHINE: linux-amd64
+    __Project__ComponentA__Deploy_Project__DEPLOY_ADDRESS: 192.168.1.100
+  before_script:
+  - "export DEPLOY_MACHINE=\"${__Project__ComponentA__Deploy_Project__DEPLOY_MACHINE}\""
+  - "export DEPLOY_ADDRESS=\"${__Project__ComponentA__Deploy_Project__DEPLOY_ADDRESS}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - "# Copy dependency artifacts per (s,d) with archive extraction"
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - missing_artifacts=''
+  - missing_extraction=''
+  - "copied=$(copy_artifact \".artifacts/__Project__SubProject__ComponentB__Composite/\" '[^/]*\\$\\{DEPLOY_MACHINE\\}\\.tar' \"$CI_PROJECT_DIR/ComponentB/\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'*${DEPLOY_MACHINE}.tar'; fi"
+  - "if [ -n \"$missing_artifacts\" ]; then echo \"No files matched for patterns \\\"${missing_artifacts#,}\\\" from \"'::Project::SubProject::ComponentB::Composite'; exit 1; fi"
+  - "if [ -n \"$missing_extraction\" ]; then echo \"$missing_extraction from \"'::Project::SubProject::ComponentB::Composite'; exit 1; fi"
+  script:
+  - |-
+    echo "== Deploy =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    echo "This is a script that deploys ComponentA to ${DEPLOY_ADDRESS}"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Staging published artifacts'
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - copy_artifact "" 'deploy-details\.txt' "$CI_PROJECT_DIR/.artifacts/Deploy_Project/" 'deploy-details.txt'
+  - echo '# Exporting parameters for Deploy Project'
+  - "echo \"__Project__ComponentA__Deploy_Project__DEPLOY_MACHINE=${DEPLOY_MACHINE}\" >> build.env"
+  - "echo \"__Project__ComponentA__Deploy_Project__DEPLOY_ADDRESS=${DEPLOY_ADDRESS}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Deploy_Project/**
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: TriggerComponent::Project::SubProject::ComponentB
+    artifacts: true
+    optional: true
+Composite:
+  stage: default
+  tags:
+  - docker
+  variables:
+    __Project__ComponentA__Deploy_Project__DEPLOY_ADDRESS: 192.168.1.90
+    GIT_CHECKOUT: none
+  before_script:
+  - "export DEPLOY_ADDRESS=\"${__Project__ComponentA__Deploy_Project__DEPLOY_ADDRESS}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - "# Copy dependency artifacts per (s,d) with archive extraction"
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - missing_artifacts=''
+  - missing_extraction=''
+  - "copied=$(copy_artifact \".artifacts/Deploy_Project/\" '[^/]*' \"$CI_PROJECT_DIR/.artifacts/Composite/deploy/\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'*'; fi"
+  - "if [ -n \"$missing_artifacts\" ]; then echo \"No files matched for patterns \\\"${missing_artifacts#,}\\\" from \"'Deploy Project'; exit 1; fi"
+  - "if [ -n \"$missing_extraction\" ]; then echo \"$missing_extraction from \"'Deploy Project'; exit 1; fi"
+  script:
+  - echo "Aggregating results"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Exporting parameters for Composite'
+  - "echo \"__Project__ComponentA__Deploy_Project__DEPLOY_ADDRESS=${DEPLOY_ADDRESS}\" >> build.env"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Composite/**
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: Deploy Project
+    artifacts: true
+    optional: true
+TriggerComponent::Project::SubProject::ComponentB:
+  stage: default
+  image: alpine:latest
+  tags:
+  - docker
+  variables:
+    TARGET_PROJECT: project/subproject/component-b
+    DEFAULT_BRANCH: main
+    CI_API_V4_URL: https://gitlab.example.com/api/v4
+  script:
+  - |-
+    # 1. Install tools
+    apk add --no-cache curl jq
+  - |-
+    # 2. URL encode the target project path (e.g. group/project -> group%2Fproject)
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    # This allows us to query the API directly by path instead of searching by ID
+    TARGET_PROJECT_ENCODED=$(echo -n "$TARGET_PROJECT" | jq -sRr @uri)
+  - |-
+    # 3. Trigger downstream pipeline on chosen branch
+    BRANCH_TO_USE=$(echo -n "$CI_COMMIT_REF_NAME" | jq -sRr @uri)
+    echo "project ID = $TARGET_PROJECT_ENCODED Branch = $BRANCH_TO_USE"
+    PIPELINE_ID=$(curl --request POST \
+        --form token=$CI_JOB_TOKEN \
+        --form ref=$BRANCH_TO_USE \
+        --form variables[STARTED_BY]="__Project__ComponentA" \
+         \
+        "$CI_API_V4_URL/projects/$TARGET_PROJECT_ENCODED/trigger/pipeline" | jq -r '.id')
+    if [ -z "$PIPELINE_ID" ] || [ "$PIPELINE_ID" == "null" ]; then
+        echo "Pipeline failed to trigger in branch $CI_COMMIT_REF_NAME Trying to trigger in default branch"
+        BRANCH_TO_USE=$(echo -n "$DEFAULT_BRANCH" | jq -sRr @uri)
+        PIPELINE_ID=$(curl --request POST \
+            --form token=$CI_JOB_TOKEN \
+            --form ref=$BRANCH_TO_USE \
+            --form variables[STARTED_BY]="__Project__ComponentA" \
+             \
+            "$CI_API_V4_URL/projects/$TARGET_PROJECT_ENCODED/trigger/pipeline" | jq -r '.id')
+        if [ -z "$PIPELINE_ID" ] || [ "$PIPELINE_ID" == "null" ]; then
+            echo "Pipeline failed to trigger"
+            exit 1
+        fi
+    fi
+    echo "Triggered pipeline: $PIPELINE_ID"
+  - |-
+    # 4. Poll until upstream finishes
+    STATUS=""
+    while [ "$STATUS" != "success" ] && [ "$STATUS" != "failed" ] && [ "$STATUS" != "canceled" ] && [ "$STATUS" != "skipped" ]; do
+      sleep 10
+      STATUS=$(curl -s --header "JOB-TOKEN: $CI_JOB_TOKEN" "$CI_API_V4_URL/projects/$TARGET_PROJECT_ENCODED/pipelines/$PIPELINE_ID" | jq -r '.status')
+      echo "Pipeline status: $STATUS"
+    done
+    if [ "$STATUS" != "success" ]; then
+      echo "Pipeline failed or was canceled or was skipped"
+      exit 1
+    fi
+  - |-
+    # 5. Download artifacts for job: Composite
+    ENCODED_BUILD_JOB=$(echo -n "Composite" | jq -sRr @uri)
+    curl --header "JOB-TOKEN: $CI_JOB_TOKEN" "$CI_API_V4_URL/projects/$TARGET_PROJECT_ENCODED/jobs/artifacts/$BRANCH_TO_USE/download?job=$ENCODED_BUILD_JOB" --output "artifacts-from__Project__SubProject__ComponentB__Composite.zip" || true
+    tmpdir="$(mktemp -d)"
+    unzip -o "artifacts-from__Project__SubProject__ComponentB__Composite.zip" -d "$tmpdir" || true
+    mkdir -p .artifacts/__Project__SubProject__ComponentB__Composite/
+    cp -a "$tmpdir/.artifacts/Composite/." ".artifacts/__Project__SubProject__ComponentB__Composite/" || true
+    rm -rf "$tmpdir" || true
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/**/*
+    when: always

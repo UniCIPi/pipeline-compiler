@@ -1,0 +1,1 @@
+echo "This is a script that deploys ComponentA to %fanciGetParam(DEPLOY_ADDRESS)%"

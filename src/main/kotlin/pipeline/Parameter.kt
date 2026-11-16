@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.pipeline
+package fanci.compiler.pipeline
 
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
@@ -9,7 +9,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo
  *
  * Serialization: the `type` discriminator is used when reading YAML to choose a concrete subtype.
  *
- * See doc/FormalModel.md (section “Parameter”). The formal model lists common attributes of Parameter.
+ * The formal model defines the common attributes of a parameter (its name and value).
  * The subtypes define additional attributes, that can affect the UI presentation, but not the behavior.
  */
 @JsonTypeInfo(
@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo
 @JsonSubTypes(
     JsonSubTypes.Type(value = TextParameter::class, name = "text"),
     JsonSubTypes.Type(value = SelectParameter::class, name = "select"),
+    JsonSubTypes.Type(value = SecretParameter::class, name = "secret"),
     JsonSubTypes.Type(value = Parameter::class, name = "parameter"),
 )
 open class Parameter(
@@ -56,6 +57,26 @@ data class SelectParameter(
  * Some features may not be supported by all platforms.
  */
 data class TextParameter(
+    override val name: String,
+    override var value: String,
+    /** How the parameter should be displayed in the UI (platform‑dependent). */
+    val displayType: DisplayType = DisplayType.NORMAL,
+    /** Label for the parameter shown in UIs. */
+    val label: String = "",
+    /** Help/tooltip text for the parameter. */
+    val description: String = "",
+) : Parameter(name, value)
+
+/**
+ * Represents a secret parameter in the pipeline.
+ * This is typically used for sensitive input fields in the UI.
+ * Some features may not be supported by all platforms.
+ *
+ * The actual secret values are stored on server
+ * @param name name for secret value
+ * @param value references a secret value stored on server
+ */
+data class SecretParameter(
     override val name: String,
     override var value: String,
     /** How the parameter should be displayed in the UI (platform‑dependent). */

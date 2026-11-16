@@ -1,0 +1,20 @@
+@file:Suppress("RedundantVisibilityModifier")
+
+package Project_SubProject_ComponentB
+
+import Project_SubProject_ComponentB.buildTypes.Project_SubProject_ComponentB_Composite
+import Project_SubProject_ComponentB.buildTypes.Project_SubProject_ComponentB_GoPackage
+import Project_SubProject_ComponentB.buildTypes.Project_SubProject_ComponentB_GoTest
+import Project_SubProject_ComponentB.vcsRoots.Project_SubProject_ComponentB_VCS
+import jetbrains.buildServer.configs.kotlin.Project
+
+public object Project : Project({
+	name = "ComponentB"
+	id("Project_SubProject_ComponentB")
+
+	vcsRoot(Project_SubProject_ComponentB_VCS)
+
+	buildType(Project_SubProject_ComponentB_GoTest)
+	buildType(Project_SubProject_ComponentB_GoPackage)
+	buildType(Project_SubProject_ComponentB_Composite)
+})

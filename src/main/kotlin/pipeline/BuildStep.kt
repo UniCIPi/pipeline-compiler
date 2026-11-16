@@ -1,17 +1,18 @@
-package com.bringauto.pipelinecompiler.pipeline
+package fanci.compiler.pipeline
 
 /**
  * A single, scriptable unit of work within an [IBuildConfiguration].
  *
  * Notes
  * - Steps execute sequentially in the order declared.
- * - A step may run inside a container image via [dockerImage].
+ * - Every step runs in the docker image of its build configuration; a step has no image of its own.
  * - Use [dockerRunParameters] to pass extra `docker run` flags if needed.
  * - [allowDockerInDocker] enables running Docker inside the container (security‑sensitive).
  * - [workDir] sets the working directory for the script.
  * - [runConditions] allow conditional execution.
  *
- * See doc/FormalModel.md (section “Build Step”) for the abstract definition.
+ * It refines the build script of a build configuration of the formal model: the scripts of the build steps
+ * are executed in order.
  */
 data class BuildStep(
     /**
@@ -23,17 +24,13 @@ data class BuildStep(
      */
     var script: String,
     /**
-     * Docker image in which the build step will be executed.
-     */
-    var dockerImage: String = "",
-
-    /**
      * Working directory of the build step, where the script will be executed.
      */
     var workDir: String = "",
 
     /**
-     * Additional arguments to be passed to the Docker command. Only used if [dockerImage] is set.
+     * Additional arguments to be passed to the Docker command.
+     * Only used if the build configuration defines a docker image.
      */
     var dockerRunParameters: String = "",
 
@@ -49,8 +46,34 @@ data class BuildStep(
      * Some platforms may emulate this via script `if` clauses.
      * @see RunCondition
      */
-    val runConditions: List<RunCondition> = emptyList()
+    val runConditions: List<RunCondition> = emptyList(),
+
+    /**
+     * Execution mode of the build step.
+     * TODO feature not tested, not described in formal model / maybe as condition?
+     */
+    val executionMode: ExecutionMode = ExecutionMode.OnSuccess
 ) {
+
+    /**
+     * Execution mode of the build step.
+     */
+    enum class ExecutionMode {
+        /**
+         * Run if all previous steps finished successfully.
+         */
+        OnSuccess,
+
+        /**
+         * Run even if some previous steps failed.
+         */
+        Always,
+
+        /**
+         * Run only if some previous step failed.
+         */
+        OnFailure,
+    }
 
     /**
      * Conditions for the build step to be executed.
@@ -60,7 +83,7 @@ data class BuildStep(
     class RunCondition(
         var parameterName: String,
         val operation: Operation,
-        val value: String,
+        var value: String,
     )
 
     /**
@@ -69,7 +92,7 @@ data class BuildStep(
     enum class Operation {
         Equal,
         NotEqual,
-        Contain,
-        NotContain
+        Contains,
+        NotContains
     }
 }

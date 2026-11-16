@@ -1,0 +1,37 @@
+# Build chain across components: Go module
+#
+# ComponentB is a Go module built by the predefined build configurations GoTest and GoPackage.
+# Its Composite is the single dependency point for other components (see ../ComponentA.yaml).
+#
+# Go Test    - runs the tests of the module.
+# Go Package - matrix over the systems and architectures, builds and packages the module.
+# Composite  - collects the packages and the test results.
+
+component:
+  name: "::Project::SubProject::ComponentB"
+  repository: "https://gitlab.example.com/project/subproject/component-b.git"
+  submodule-strategy: recursive
+  build-configurations:
+    - type: "GoTest"
+    - type: "GoPackage"
+      system-list:
+        - linux
+        - windows
+      arch-list:
+        - amd64
+        - arm64
+      dependencies:
+        - build-configuration-name: "Go Test"
+          failure-action: FAIL
+    - type: Composite
+      dependencies:
+        - build-configuration-name: "Go Package"
+          failure-action: ADD_PROBLEM
+          artifacts:
+            - source: "*"
+              destination: "package/"
+        - build-configuration-name: "Go Test"
+          failure-action: ADD_PROBLEM
+          artifacts:
+            - source: "test-results.xml"
+              destination: "test-results/"

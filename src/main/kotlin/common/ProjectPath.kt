@@ -1,4 +1,4 @@
-package com.bringauto.pipelinecompiler.common
+package fanci.compiler.common
 
 import java.io.File
 import java.nio.file.Path

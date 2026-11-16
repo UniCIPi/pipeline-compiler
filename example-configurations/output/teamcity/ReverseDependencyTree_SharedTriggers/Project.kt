@@ -1,0 +1,22 @@
+@file:Suppress("RedundantVisibilityModifier")
+
+package ReverseDependencyTree_SharedTriggers
+
+import ReverseDependencyTree_SharedTriggers.buildTypes.ReverseDependencyTree_SharedTriggers_A
+import ReverseDependencyTree_SharedTriggers.buildTypes.ReverseDependencyTree_SharedTriggers_B
+import ReverseDependencyTree_SharedTriggers.buildTypes.ReverseDependencyTree_SharedTriggers_C
+import ReverseDependencyTree_SharedTriggers.buildTypes.ReverseDependencyTree_SharedTriggers_D
+import ReverseDependencyTree_SharedTriggers.vcsRoots.ReverseDependencyTree_SharedTriggers_VCS
+import jetbrains.buildServer.configs.kotlin.Project
+
+public object Project : Project({
+	name = "Shared Triggers"
+	id("ReverseDependencyTree_SharedTriggers")
+
+	vcsRoot(ReverseDependencyTree_SharedTriggers_VCS)
+
+	buildType(ReverseDependencyTree_SharedTriggers_B)
+	buildType(ReverseDependencyTree_SharedTriggers_A)
+	buildType(ReverseDependencyTree_SharedTriggers_C)
+	buildType(ReverseDependencyTree_SharedTriggers_D)
+})

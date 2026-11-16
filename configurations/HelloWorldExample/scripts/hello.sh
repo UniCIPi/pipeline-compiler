@@ -1,1 +1,0 @@
-echo "Hello  called from branch %pipelineGetParam(PIPELINE_BUILD_BRANCH)%"

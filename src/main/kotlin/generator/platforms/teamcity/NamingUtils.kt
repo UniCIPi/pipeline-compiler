@@ -1,7 +1,7 @@
-package com.bringauto.pipelinecompiler.generator.platforms.teamcity
+package fanci.compiler.generator.platforms.teamcity
 
-import com.bringauto.pipelinecompiler.common.ProjectPath
-import com.bringauto.pipelinecompiler.common.ProjectPath.Companion.PROJECT_PATH_DELIMITER
+import fanci.compiler.common.ProjectPath
+import fanci.compiler.common.ProjectPath.Companion.PROJECT_PATH_DELIMITER
 import com.squareup.kotlinpoet.ClassName
 import dev.turingcomplete.textcaseconverter.StandardTextCases
 import dev.turingcomplete.textcaseconverter.StandardWordsSplitters

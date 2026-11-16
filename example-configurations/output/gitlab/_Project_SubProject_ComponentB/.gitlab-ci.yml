@@ -1,0 +1,211 @@
+---
+stages:
+- default
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  GIT_SUBMODULE_DEPTH: 1
+  GIT_STRATEGY: clone
+  GIT_SUBMODULE_FORCE_HTTPS: "false"
+Go Test:
+  stage: default
+  image: golang:1.24
+  tags:
+  - docker
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |-
+    echo "== test =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    set -o pipefail
+    go install github.com/jstemmer/go-junit-report/v2@latest
+    go test -v ./... 2>&1 | go-junit-report -set-exit-code > junit-report.xml
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'pipeline' && $STARTED_BY == '__Project__ComponentA'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    when: always
+    reports:
+      junit:
+      - junit-report.xml
+Go Package:run:
+  stage: default
+  image: golang:1.24
+  tags:
+  - docker
+  variables:
+    __Project__SubProject__ComponentB__Go_Package__PACKAGE_NAME: ""
+  before_script:
+  - "export PACKAGE_NAME=\"${__Project__SubProject__ComponentB__Go_Package__PACKAGE_NAME}\""
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  script:
+  - |-
+    echo "== build =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    #!/bin/bash
+    set -e
+
+    VERSION=$(sed -E -n 's/version=([^=]+)/\1/p' < version.txt)
+    MODULE_NAME=$(go list -m | awk -F/ '{print $NF}')
+    PACKAGE_NAME=${MODULE_NAME}_v${VERSION}_${SYSTEM}-${ARCHITECTURE}
+
+    if [[ -d ${PACKAGE_NAME}/ ]]; then
+      echo "ERROR: directory ${PACKAGE_NAME}/ already exist." >&2
+      exit 1
+    fi
+    if [ -f "${PACKAGE_NAME}.zip" ]; then
+      echo "File ${PACKAGE_NAME}.zip already exists. Please remove it before running the script." >&2
+      exit 1
+    fi
+
+    export GOFLAGS="-buildvcs=false -a -ldflags=-w"
+    CGO_ENABLED=0 GOOS=${SYSTEM} GOARCH=${ARCHITECTURE} go build -o ./${PACKAGE_NAME}/bin/ ./cmd/...
+
+    echo "PACKAGE_NAME=$PACKAGE_NAME" >> build.env
+  - |-
+    echo "== package =="
+    if [ -f build.env ]; then set -a; . build.env; set +a; fi
+    #!/bin/bash
+    set -e
+    if [ -d "resources" ]; then
+        cp -r resources/* ./${PACKAGE_NAME}/etc/
+    fi
+
+    if [ -d "doc" ]; then
+        cp -r doc ./${PACKAGE_NAME}/
+    fi
+
+    cp LICENSE ./${PACKAGE_NAME}/
+    cp README.md ./${PACKAGE_NAME}/
+    cp version.txt ./${PACKAGE_NAME}/
+
+    go install github.com/Melky-Phoe/gozip/cmd/gozip@v1.0.0
+    gozip -c "${PACKAGE_NAME}.zip" "./${PACKAGE_NAME}/"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - echo '# Staging published artifacts'
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - "copy_artifact \"\" '\\$\\{PACKAGE_NAME\\}\\.zip' \"$CI_PROJECT_DIR/.artifacts/Go_Package/\" '${PACKAGE_NAME}.zip'"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'pipeline' && $STARTED_BY == '__Project__ComponentA'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Go_Package/**
+    when: always
+    reports:
+      dotenv: build.env
+  needs:
+  - job: Go Test
+    artifacts: true
+    optional: false
+  parallel:
+    matrix:
+    - ARCHITECTURE:
+      - amd64
+      - arm64
+      SYSTEM:
+      - linux
+      - windows
+Go Package:
+  stage: default
+  tags:
+  - docker
+  script:
+  - echo 'Aggregating artifacts for Go Package'
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'pipeline' && $STARTED_BY == '__Project__ComponentA'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Go_Package/**
+    when: always
+  needs:
+  - job: Go Package:run
+    artifacts: true
+    optional: false
+Composite:
+  stage: default
+  tags:
+  - docker
+  variables:
+    GIT_CHECKOUT: none
+  before_script:
+  - '# Load dotenv from dependencies if present'
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  - "# Copy dependency artifacts per (s,d) with archive extraction"
+  - |-
+    artifact_list() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      find . -path ./.artifacts -prune -o \( -type f -o -type l \) -print | sed 's|^\./||' |
+        { grep -E -- "^($2)$" || [ $? -eq 1 ]; } | while IFS= read -r f; do
+          if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+        done
+    )
+    copy_artifact() (
+      cd "${1:-.}" 2>/dev/null || exit 0
+      if [ -n "$4" ] && [ -d "$4" ]; then cd "$4" && set -- . '.*' "$3"; fi
+      artifact_list . "$2" | while IFS= read -r f; do
+        mkdir -p "$3/$(dirname "$f")" && cp "$f" "$3/$f" && printf '%s\n' "$f"
+      done
+    )
+  - missing_artifacts=''
+  - missing_extraction=''
+  - "copied=$(copy_artifact \".artifacts/Go_Package/\" '[^/]*' \"$CI_PROJECT_DIR/.artifacts/Composite/package/\" '')"
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'*'; fi"
+  - "if [ -n \"$missing_artifacts\" ]; then echo \"No files matched for patterns \\\"${missing_artifacts#,}\\\" from \"'Go Package'; exit 1; fi"
+  - "if [ -n \"$missing_extraction\" ]; then echo \"$missing_extraction from \"'Go Package'; exit 1; fi"
+  - missing_artifacts=''
+  - missing_extraction=''
+  - copied=$(copy_artifact ".artifacts/Go_Test/" 'test-results\.xml' "$CI_PROJECT_DIR/.artifacts/Composite/test-results/" 'test-results.xml')
+  - "if [ -z \"$copied\" ]; then missing_artifacts=\"$missing_artifacts,\"'test-results.xml'; fi"
+  - "if [ -n \"$missing_artifacts\" ]; then echo \"No files matched for patterns \\\"${missing_artifacts#,}\\\" from \"'Go Test'; exit 1; fi"
+  - "if [ -n \"$missing_extraction\" ]; then echo \"$missing_extraction from \"'Go Test'; exit 1; fi"
+  script:
+  - echo "Aggregating results"
+  after_script:
+  - "if [ -f build.env ]; then set -a; . build.env; set +a; fi"
+  rules:
+  - if: $CI_PIPELINE_SOURCE == 'pipeline' && $STARTED_BY == '__Project__ComponentA'
+    when: on_success
+  - if: $CI_PIPELINE_SOURCE == 'web' || $CI_PIPELINE_SOURCE == 'api'
+    when: on_success
+  - when: never
+  artifacts:
+    paths:
+    - .artifacts/Composite/**
+    when: always
+  needs:
+  - job: Go Package
+    artifacts: true
+    optional: true
+  - job: Go Test
+    artifacts: true
+    optional: true

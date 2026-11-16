@@ -4,10 +4,10 @@ plugins {
 }
 
 application {
-    mainClass.set("com.bringauto.pipelinecompiler.MainKt") // Adjust to your actual class path
+    mainClass.set("fanci.compiler.MainKt")
 }
 
-group = "com.bringauto.pipelinecompiler"
+group = "fanci"
 version = "1.0-SNAPSHOT"
 
 repositories {

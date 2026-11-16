@@ -22,40 +22,52 @@ The exact interpretation of work branches is trigger-type dependent. The trigger
 To define tags in *include-branches* or *exclude-branches*, use the `tags/` prefix. 
 The generator will translate `tags/` into platform-specific clauses.
 
+To define pull requests (merge requests) in *include-branches* or *exclude-branches*, use the `mr/` prefix.
+The generator will translate `mr/` into the branch naming of the VCS host system of the component
+(`merge-requests/` for GitLab, `pull/` for GitHub and Gitea) or into platform-specific clauses.
+`mr/*` covers all pull requests, `mr/42` covers the pull request with id 42.
+
+A trigger that defines no branches at all works on all branches **and** all pull requests.
+
+See [PullRequests.md](PullRequests.md) for the component-level configuration of pull request support.
+
 ## VCS Trigger
 
-Starts a build when changes are detected in VCS. You can optionally scope the trigger to specific VCS roots and paths via `trigger-rules` and also filter by branches via `include-branches` / `exclude-branches`.
-
-Supports triggering on changes in VCS roots of other components.
+Starts a build when changes are detected in the repository of one component. You can optionally scope the trigger
+to the repository of another component via `watched-component`, to changed paths via `include-paths` /
+`exclude-paths`, and also filter by branches via `include-branches` / `exclude-branches`.
 
 Fields (VCS):
-- `trigger-rules` (list): Optional list of objects specifying path-based rules per VCS root. Each rule supports:
-    - `vcs-root-component` (string, optional): Name of the component, defining VCS root to attach the rule to.
-    - `include-paths` (list of strings): Paths to include. 
-      - Supports Ant-like wildcards. 
-      - At least one of `include-paths` or `exclude-paths` must be provided.
-      - If no `include-paths` are provided, all files are included automatically.`
-      - If `vcs-root-component` is defined the `include-paths` must not be empty. 
-        - This is for deterministic reasons. Otherwise, TeamCity would fire the trigger on all changes in all dependencies.
-    - `exclude-paths` (list of strings, optional): Paths to exclude. Supports Ant-like wildcards.
+- `watched-component` (string, optional): Fully qualified name of the component whose repository is watched.
+  If not provided, the repository of the component owning the build configuration is watched.
+  - To watch several components, define one VCS trigger per component.
+  - TeamCity sees the changes of another component only when the component is a dependency of the build
+    configuration.
+  - GitLab cannot watch other repositories. The paths are applied to the own repository.
+- `include-paths` (list of strings, optional): Paths to include. Supports Ant-like wildcards.
+  - If no `include-paths` are provided, all paths are included.
+- `exclude-paths` (list of strings, optional): Paths to exclude. Supports Ant-like wildcards.
+- `commit-message-regex` (string, optional): Java regex applied to the commit message. When set, it is combined
+  **conjunctively** with every include and exclude path — a path only matches when the commit message also
+  matches.
+  - Example: `exclude-paths: ["**"]` + `commit-message-regex: \[skip ci\]` generates `-:comment=\[skip ci\]:**`,
+    skipping the build when the commit message contains `[skip ci]`.
 - `<common fields>`
 
-Minimal YAML. This triggers on every changes:
+Minimal YAML. This triggers on every change in the own repository:
 ```yaml
 type: vcs
 ```
 
-Advanced YAML with trigger rules:
+Advanced YAML:
 ```yaml
 type: vcs
-trigger-rules:
-  - vcs-root-component: ::Project::ComponentA        # optional; attaches rule to a specific VCS root
-    user: JohnDoe             # optional; author filter
-    include-paths:        # at least one of include-paths/exclude-paths must be non-empty
-      - src/**
-      - tests/**
-    exclude-paths:
-      - src/generated/**
+watched-component: ::Project::ComponentA  # optional; watches the repository of ComponentA
+include-paths:                            # optional; all paths when empty
+  - src/**
+  - tests/**
+exclude-paths:
+  - src/generated/**
 include-branches:
   - main
   - develop
@@ -87,6 +99,7 @@ Unix cron expression fields:
 YAML:
 ```yaml
 type: schedule
+name: nightly                     # optional; unique within the build configuration
 cron: "0 0 * * *"                 # every day at midnight
 with-pending-changes-only: false  # optional; default false
 include-branches:
@@ -98,6 +111,9 @@ parameters:
 
 Fields (Schedule):
 - `cron` (string, required): Standard 5-field UNIX cron syntax `min hour day month weekday`. Quotes recommended.
+- `name` (string, optional): Name of the trigger, unique within the build configuration. On GitLab, it identifies
+  the pipeline schedule and protects the schedule from being disconnected when the triggers are reordered
+  (see the GitLab note below). On other platforms it is used for identification only.
 - `with-pending-changes-only` (boolean, optional): If true, only triggers when there are pending changes.
 - `<common fields>`
 
@@ -106,7 +122,16 @@ Work branches define all branches that are started by the trigger.
 Notes:
 - The trigger starts build for every matching branch - set `include-branches` to limit the scope.
 - Timezone and exact semantics are platform/server-specific; ensure the expression matches your server settings.
-- GitLab has limited support for schedule creation from code; you may need to configure schedules in the UI.
+- GitLab schedules cannot be created from the pipeline definition; they are configured in the UI
+  (Build -> Pipeline schedules). The generator prints the schedules to create. Each schedule has to set the variable
+  `__PIPELINE_GENERATOR_SCHEDULE` to the identifier of its trigger, so it starts only its build configuration
+  and the dependencies of it:
+  - `<build configuration>-<name>` for a named trigger,
+  - `<build configuration>-<n>` for the n-th unnamed schedule trigger of the build configuration. Reordering
+    the unnamed triggers changes their identifiers, the schedules in GitLab then have to be updated.
+
+  The target branch is given by the schedule itself; create one schedule per branch in `include-branches`.
+  A schedule without the variable starts no build configuration.
 
 ## Finish Build Trigger
 

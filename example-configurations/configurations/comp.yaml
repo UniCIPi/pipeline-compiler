@@ -1,0 +1,90 @@
+# Example of the input language (Section "Input Language" of the paper)
+#
+# The configuration below the comments is the listing of the paper, line by line. It illustrates
+# the concepts of the formal model, it does not model a real build. The scripts only print
+# parameter values to the console or to a file.
+#
+# Dependency tree (B < A):
+#
+#     A
+#     |
+#     B
+#
+# B - parameters P = "p0" and Q = "q0", writes P to p.txt and publishes it as an output artifact,
+#     sets its output parameter Q to "q1".
+# A - matrix M over x, y, downloads p.txt from B, prints p.txt, the dependency parameter
+#     ::comp::B::Q and M.
+#
+# Triggers:
+#   B - VCS on all branches except doc*, sets P to the build branch.
+#   A - VCS on main, only for changes under src/, no arguments,
+#       schedule every day at 3:00 on main, sets the dependency parameter P of B to "sched".
+#
+# What to observe:
+#   - a commit to main changing a file in src/ matches both VCS triggers, only the trigger of A fires:
+#     one build job of B and two build jobs of A, which print p0, q1 and x or y,
+#   - a commit to another branch f starts one build job of B, which writes f to p.txt,
+#   - the scheduled build jobs of A print sched, q1 and x or y.
+#
+# To run the generated configuration, set `repository` to a repository with a directory src/.
+
+component:
+  name: "::comp"
+  repository: "https://github.com/org/comp.git"
+  default-branch: main
+  build-configurations:
+  - configuration-name: "B"
+    type: ScriptRunner
+    parameters:
+    - name: P
+      value: "p0"
+    - name: Q
+      value: "q0"
+    steps:
+    - step-name: "s1"
+      script-content: |
+        echo "%fanciGetParam(P)%" > p.txt
+        %fanciSetParam(Q, q1)%
+    docker-image: "debian:12"
+    publish-artifacts:
+    - source: "p.txt"
+    triggers:
+    - type: vcs
+      include-branches:
+      - "*"
+      exclude-branches:
+      - "doc*"
+      parameters:
+      - name: P
+        value: "%fanciGetParam(FANCI_BUILD_BRANCH)%"
+  - configuration-name: "A"
+    type: ScriptRunner
+    dependencies:
+    - build-configuration-name: "B"
+      failure-action: FAIL
+      artifacts:
+      - source: "p.txt"
+    matrix:
+      M:
+      - x
+      - y
+    steps:
+    - step-name: "s1"
+      script-content: |
+        cat p.txt
+        echo "%fanciGetParam(::comp::B::Q)%"
+        echo "%fanciGetParam(M)%"
+    triggers:
+    - type: vcs
+      include-branches:
+      - main
+      include-paths:
+      - "src/**"
+    - type: schedule
+      cron: "0 3 * * *"
+      include-branches:
+      - main
+      parameters:
+      - name: "::comp::B::P"
+        value: "sched"
+    docker-image: "debian:12"

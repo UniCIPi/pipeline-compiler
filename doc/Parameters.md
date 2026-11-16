@@ -15,11 +15,45 @@ Parameter name must follow the regex pattern: `[a-zA-Z_][a-zA-Z0-9._]*`
 
 Parameter types are defined in [Parameter Types](../src/main/kotlin/pipeline/Parameter.kt).
 Parameters can be defined directly in the pipeline build configuration, or they can be passed from the input configuration.
+Parameters are defined under the `parameters` key of a build step (supported by `script-runner` and `composite` types).
+
+Each parameter entry requires `name` and `value`. The `type` field selects the parameter kind:
+
+| type | Description | Extra fields |
+|---|---|---|
+| `parameter` | Plain key/value, no UI metadata | — |
+| `text` | Free-text input field | `label`, `description`, `display-type` |
+| `select` | Dropdown with fixed choices | `label`, `description`, `options`, `allow-multiple`, `display-type` |
+| `secret` | Masked/secret value | `label`, `description`, `display-type` |
+
+`display-type` controls UI visibility: `NORMAL` (default), `PROMPT`, or `HIDDEN`.
+
+```yaml
+parameters:
+  - name: MY_PARAM
+    value: default
+    type: text
+    label: My Parameter
+    description: A short description shown in the UI
+
+  - name: RELEASE_TYPE
+    value: patch
+    type: select
+    label: Release type
+    options:
+      - patch
+      - minor
+      - major
+
+  - name: API_TOKEN
+    value: ""
+    type: secret
+```
 
 ## Using parameters
 
 Only previously defined parameters can be used in the build configuration.
-PipelineGenerator provides special placeholders described below to get/set parameter values in the pipeline settings.
+The compiler provides special placeholders described below to get/set parameter values in the pipeline settings.
 The placeholders are replaced with the platform-specific code to get/set the parameter value.
 
 > Note:
@@ -28,23 +62,23 @@ The placeholders are replaced with the platform-specific code to get/set the par
 
 ### Get parameter value
 
-To use a parameter value, use the `%pipelineGetParam(<parameter name>)%` clause.
+To use a parameter value, use the `%fanciGetParam(<parameter name>)%` clause.
 - May be used in any place where a value is expected.
 - Cannot be used as a parameter name/key (only within values).
 - Supports fully qualified names (FQN) to reference parameters from other build configurations; see [Fully qualified name](BuildChaining.md#concepts).
 
 Examples:
-- Local: `%pipelineGetParam(my_param)%`
-- FQN: `%pipelineGetParam(::Project::Component::Build::my_param)%`
+- Local: `%fanciGetParam(my_param)%`
+- FQN: `%fanciGetParam(::Project::Component::Build::my_param)%`
 
 
 ### Set parameter value
 
-To set a parameter value, use the `%pipelineSetParam(<parameter name>, <value>)%` clause.
+To set a parameter value, use the `%fanciSetParam(<parameter name>, <value>)%` clause.
 - Only valid in script content.
  
 Example:
-- In a script: `%pipelineSetParam(IMAGE_TAG, 1.2.3)%`
+- In a script: `%fanciSetParam(IMAGE_TAG, 1.2.3)%`
 
 ## Using dependencies parameters
 
@@ -60,7 +94,7 @@ To work with dependency parameters:
 
 ### Using parameters from preceding build configurations
 
-Use `%pipelineGetParam(<parameterFullyQualifiedName>)%`.
+Use `%fanciGetParam(<parameterFullyQualifiedName>)%`.
 
 ### Overriding input parameters
 
@@ -79,7 +113,7 @@ To ensure pipeline configurations remain platform-agnostic, the generator uses a
 These generic placeholders are automatically replaced with the correct platform-specific variable during generation.
 
 ### Naming Convention
-All standard parameters follow the `PIPELINE_` prefix convention (e.g., `PIPELINE_BUILD_BRANCH`).
+All standard parameters follow the `PIPELINE_` prefix convention (e.g., `FANCI_BUILD_BRANCH`).
 
 ### Implementation Details
 *   **Source of Truth:** The complete list of required parameters is defined in the `StandardParameter` enum within [IPlatform.kt](../src/main/kotlin/generator/IPlatform.kt).

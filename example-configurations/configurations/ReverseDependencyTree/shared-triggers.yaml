@@ -1,0 +1,177 @@
+# Shared triggers experiment
+#
+# Shows whether shared dependencies are started repeatedly when several of their dependents
+# are triggered by the same event, and which trigger arguments the shared dependency receives.
+#
+# Dependency tree (B < A, B < C, A < D, C < D):
+#
+#     D
+#    / \
+#   A   C
+#    \ /
+#     B
+#
+# Triggers:
+#   A, C - VCS on main, VCS on fix-*, schedule every 10 minutes on main
+#   D    - VCS on main, schedule every 10 minutes on main
+#   B    - none
+# Every VCS trigger sets the parameter StartedBy of B to the name of its build configuration,
+# e.g. "A" or "C". B prints the value it received.
+#
+# What to observe:
+#   - after a commit to main (A, C and D fire) and after a commit to a fix-* branch (only A and C fire):
+#     how many builds of B, A, C and D are started,
+#   - which StartedBy every build of B received, i.e. whose trigger arguments won,
+#   - every build prints the build numbers of the dependency builds it used.
+#
+# The schedule fires every 10 minutes - remove or relax it after the experiment.
+# The repository content is irrelevant, it is only checked out.
+
+component:
+  name: "::Reverse Dependency Tree::Shared Triggers"
+  repository: "https://gitlab.example.com/fanci/examples.git"
+  default-branch: main
+  submodule-strategy: none
+  pull-request:
+    enabled: false
+  build-configurations:
+    # -----------------------------------------------------------------------
+    # 1) Shared dependency B - no triggers
+    # -----------------------------------------------------------------------
+    - type: ScriptRunner
+      configuration-name: "B"
+      docker-image: "docker.io/library/debian:12"
+      parameters:
+        - name: BUILD_ID
+          value: "unset"
+        # Set by the VCS triggers of the dependents.
+        - name: StartedBy
+          value: "default"
+      steps:
+        - step-name: "Report the build"
+          script-content: |
+            set -eu
+            echo "B: build %fanciGetParam(FANCI_BUILD_NUMBER)% on branch %fanciGetParam(FANCI_BUILD_BRANCH)% at $(date -u +%H:%M:%S)"
+            echo "B: StartedBy = %fanciGetParam(StartedBy)%"
+            %fanciSetParam(BUILD_ID, %fanciGetParam(FANCI_BUILD_NUMBER)%)%
+
+    # -----------------------------------------------------------------------
+    # 2) A - depends on B
+    # -----------------------------------------------------------------------
+    - type: ScriptRunner
+      configuration-name: "A"
+      docker-image: "docker.io/library/debian:12"
+      parameters:
+        - name: BUILD_ID
+          value: "unset"
+      dependencies:
+        - build-configuration-name: "B"
+          failure-action: FAIL
+      steps:
+        - step-name: "Report the build and the used build of B"
+          # No `set -u`: an unset dependency parameter prints as empty instead of failing the build.
+          script-content: |
+            set -e
+            echo "A: build %fanciGetParam(FANCI_BUILD_NUMBER)% on branch %fanciGetParam(FANCI_BUILD_BRANCH)% at $(date -u +%H:%M:%S)"
+            echo "A: uses B build %fanciGetParam(::Reverse Dependency Tree::Shared Triggers::B::BUILD_ID)%"
+            %fanciSetParam(BUILD_ID, %fanciGetParam(FANCI_BUILD_NUMBER)%)%
+      triggers:
+        - type: vcs
+          include-branches:
+            - main
+          # Sets the parameter of the dependency B.
+          parameters:
+            - name: "::Reverse Dependency Tree::Shared Triggers::B::StartedBy"
+              value: "A"
+        - type: vcs
+          include-branches:
+            - fix-*
+          # Sets the parameter of the dependency B.
+          parameters:
+            - name: "::Reverse Dependency Tree::Shared Triggers::B::StartedBy"
+              value: "A"
+        - type: schedule
+          cron: "*/10 * * * *"
+          include-branches:
+            - main
+          parameters:
+            - name: "::Reverse Dependency Tree::Shared Triggers::B::StartedBy"
+              value: "A-schedule"
+
+    # -----------------------------------------------------------------------
+    # 3) C - identical to A, its triggers set StartedBy of B to "C"
+    # -----------------------------------------------------------------------
+    - type: ScriptRunner
+      configuration-name: "C"
+      docker-image: "docker.io/library/debian:12"
+      parameters:
+        - name: BUILD_ID
+          value: "unset"
+      dependencies:
+        - build-configuration-name: "B"
+          failure-action: FAIL
+      steps:
+        - step-name: "Report the build and the used build of B"
+          # No `set -u`: an unset dependency parameter prints as empty instead of failing the build.
+          script-content: |
+            set -e
+            echo "C: build %fanciGetParam(FANCI_BUILD_NUMBER)% on branch %fanciGetParam(FANCI_BUILD_BRANCH)% at $(date -u +%H:%M:%S)"
+            echo "C: uses B build %fanciGetParam(::Reverse Dependency Tree::Shared Triggers::B::BUILD_ID)%"
+            %fanciSetParam(BUILD_ID, %fanciGetParam(FANCI_BUILD_NUMBER)%)%
+      triggers:
+        - type: vcs
+          include-branches:
+            - main
+          # Sets the parameter of the dependency B.
+          parameters:
+            - name: "::Reverse Dependency Tree::Shared Triggers::B::StartedBy"
+              value: "C"
+        - type: vcs
+          include-branches:
+            - fix-*
+          # Sets the parameter of the dependency B.
+          parameters:
+            - name: "::Reverse Dependency Tree::Shared Triggers::B::StartedBy"
+              value: "C"
+        - type: schedule
+          cron: "*/10 * * * *"
+          include-branches:
+            - main
+          parameters:
+            - name: "::Reverse Dependency Tree::Shared Triggers::B::StartedBy"
+              value: "C-schedule"
+
+    # -----------------------------------------------------------------------
+    # 4) D - depends on A and C, only the VCS trigger on main and the schedule
+    # -----------------------------------------------------------------------
+    - type: ScriptRunner
+      configuration-name: "D"
+      docker-image: "docker.io/library/debian:12"
+      dependencies:
+        - build-configuration-name: "A"
+          failure-action: FAIL
+        - build-configuration-name: "C"
+          failure-action: FAIL
+      steps:
+        - step-name: "Report the build and the used builds of A and C"
+          # No `set -u`: an unset dependency parameter prints as empty instead of failing the build.
+          script-content: |
+            set -e
+            echo "D: build %fanciGetParam(FANCI_BUILD_NUMBER)% on branch %fanciGetParam(FANCI_BUILD_BRANCH)% at $(date -u +%H:%M:%S)"
+            echo "D: uses A build %fanciGetParam(::Reverse Dependency Tree::Shared Triggers::A::BUILD_ID)%"
+            echo "D: uses C build %fanciGetParam(::Reverse Dependency Tree::Shared Triggers::C::BUILD_ID)%"
+      triggers:
+        - type: vcs
+          include-branches:
+            - main
+          # Sets the parameter of the dependency B.
+          parameters:
+            - name: "::Reverse Dependency Tree::Shared Triggers::B::StartedBy"
+              value: "D"
+        - type: schedule
+          cron: "*/10 * * * *"
+          include-branches:
+            - main
+          parameters:
+            - name: "::Reverse Dependency Tree::Shared Triggers::B::StartedBy"
+              value: "D-schedule"
