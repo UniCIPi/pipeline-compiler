@@ -24,7 +24,7 @@ generated results.
 
 ## Requirements
 
-- JDK 17 to 24 on `PATH` or in `JAVA_HOME`, to run Gradle. The Gradle wrapper (8.14.1) does not start on JDK 25.
+- JDK 17 or newer on `PATH` or in `JAVA_HOME`, to run Gradle (wrapper 9.9.1). Tested with JDK 24 and 25.
 - Internet access for the first build. The wrapper downloads Gradle, the libraries from Maven Central and,
   when no JDK 21 is installed, the JDK 21 toolchain the compiler is built with.
 
